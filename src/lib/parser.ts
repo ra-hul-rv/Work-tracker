@@ -24,11 +24,11 @@ export const parseWorkDetails = (raw: string): ParsedDetails => {
   let customerName = "";
   let contact = "";
 
-  const namePhoneMatch = firstLine.match(/^(?<name>.+?)\s*(?:::|:|--?|\|)\s*(?<phone>[+]?\d[\d\s-]{6,})$/);
+  const namePhoneMatch = firstLine.match(/^(.*?)\s*(?:::|:|--?|\|)\s*([+]?\d[\d\s-]{6,})$/);
 
-  if (namePhoneMatch && namePhoneMatch.groups) {
-    customerName = clean(namePhoneMatch.groups.name);
-    contact = clean(namePhoneMatch.groups.phone).replace(/\s+/g, "");
+  if (namePhoneMatch && namePhoneMatch[1] && namePhoneMatch[2]) {
+    customerName = clean(namePhoneMatch[1]);
+    contact = clean(namePhoneMatch[2]).replace(/\s+/g, "");
   } else {
     customerName = firstLine;
     const digits = firstLine.match(/([+]?\d[\d\s-]{6,})/);
