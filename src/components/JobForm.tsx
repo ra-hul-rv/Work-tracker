@@ -6,29 +6,60 @@ import {
   calculateTotalCollected,
   calculateTotalIncentive,
 } from "../lib/calculations";
-import { CustomIncentive, IncentiveRates, JobInput } from "../lib/types";
+import { CustomIncentive, IncentiveCompany, JobInput } from "../lib/types";
 import { parseWorkDetails } from "../lib/parser";
 
-const makeEmptyJob = (rates: IncentiveRates, customRates: Array<{ label: string; value: number }>): JobInput => ({
+const EMPTY_COMPANY: IncentiveCompany = {
+  id: "default",
+  name: "Default",
+  rates: {
+    insCharge: 0,
+    stand: 0,
+    whiteTape: 0,
+    plugTop: 0,
+    piping: 0,
+  },
+  customRates: [],
+};
+
+const syncCustomIncentives = (
+  existing: CustomIncentive[] = [],
+  customRates: Array<{ label: string; value: number }> = [],
+): CustomIncentive[] => {
+  const next = [...existing];
+  customRates.forEach((item) => {
+    const found = next.find((n) => n.label === item.label);
+    if (!found) {
+      next.push({ label: item.label, amount: item.value, applied: false });
+    } else {
+      found.amount = item.value;
+    }
+  });
+  return next;
+};
+
+const makeEmptyJob = (company: IncentiveCompany): JobInput => ({
   date: new Date().toISOString().slice(0, 10),
   type: "Installation",
+  status: "pending",
   customerName: "",
   location: "",
   contact: "",
   acDetails: "",
   helper: "",
   helperSalary: 0,
+  companyId: company.id,
+  companyName: company.name,
   charges: {
-    insCharge: rates.insCharge,
-    stand: rates.stand,
-    whiteTape: rates.whiteTape,
-    plugTop: rates.plugTop,
-    piping: rates.piping,
+    insCharge: company.rates.insCharge,
+    stand: company.rates.stand,
+    whiteTape: company.rates.whiteTape,
+    plugTop: company.rates.plugTop,
+    piping: company.rates.piping,
     extraWork: 0,
     woOutdoorCharge: 0,
-    amountPaid: 0,
   },
-  customIncentives: customRates.map((item) => ({ label: item.label, amount: item.value, applied: false })),
+  customIncentives: syncCustomIncentives([], company.customRates),
 });
 
 const numberOrZero = (value: string) => {
@@ -38,33 +69,78 @@ const numberOrZero = (value: string) => {
 
 type Props = {
   onSubmit: (job: JobInput) => Promise<void>;
-  rates: IncentiveRates;
-  customRates: Array<{ label: string; value: number }>;
+  companies: IncentiveCompany[];
+  selectedCompanyId?: string;
+  onSelectCompany?: (companyId: string) => void;
+  initialJob?: JobInput;
+  submitLabel?: string;
+  onCancel?: () => void;
 };
 
-export function JobForm({ onSubmit, rates, customRates }: Props) {
+export function JobForm({
+  onSubmit,
+  companies,
+  selectedCompanyId,
+  onSelectCompany,
+  initialJob,
+  submitLabel = "Save",
+  onCancel,
+}: Props) {
+  const activeCompany = useMemo(
+    () => companies.find((c) => c.id === selectedCompanyId) || companies[0] || EMPTY_COMPANY,
+    [companies, selectedCompanyId],
+  );
+
   const [rawMessage, setRawMessage] = useState("");
-  const [job, setJob] = useState<JobInput>(makeEmptyJob(rates, customRates));
+  const [job, setJob] = useState<JobInput>(() => {
+    if (initialJob) {
+      const company = companies.find((c) => c.id === (initialJob.companyId || selectedCompanyId)) || activeCompany;
+      return {
+        ...initialJob,
+        status: initialJob.status || "pending",
+        companyId: company.id,
+        companyName: company.name,
+        customIncentives: syncCustomIncentives(initialJob.customIncentives || [], company.customRates),
+      };
+    }
+    return makeEmptyJob(activeCompany);
+  });
   const [submitting, setSubmitting] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [chargesOpen, setChargesOpen] = useState(true);
 
-  // Sync new custom incentives into the form when added
+  // Keep form in sync when editing or switching companies
   useEffect(() => {
-    setJob((current) => {
-      const existing = current.customIncentives || [];
-      const next: CustomIncentive[] = [...existing];
-      customRates.forEach((item) => {
-        const found = next.find((n) => n.label === item.label);
-        if (!found) {
-          next.push({ label: item.label, amount: item.value, applied: false });
-        }
+    if (initialJob) {
+      const company = companies.find((c) => c.id === (initialJob.companyId || selectedCompanyId)) || activeCompany;
+      setJob({
+        ...initialJob,
+        status: initialJob.status || "pending",
+        companyId: company.id,
+        companyName: company.name,
+        customIncentives: syncCustomIncentives(initialJob.customIncentives || [], company.customRates),
       });
-      return { ...current, customIncentives: next };
+      return;
+    }
+    setJob((current) => {
+      const company = companies.find((c) => c.id === (current.companyId || selectedCompanyId)) || activeCompany;
+      const nextCustom = syncCustomIncentives(current.customIncentives || [], company.customRates);
+      return { ...current, companyId: company.id, companyName: company.name, customIncentives: nextCustom };
     });
-  }, [customRates]);
+  }, [initialJob, companies, selectedCompanyId, activeCompany]);
 
-  const computed = useMemo(() => calculateJob(job, rates), [job, rates]);
+  useEffect(() => {
+    if (!initialJob) {
+      setJob(makeEmptyJob(activeCompany));
+    }
+  }, [activeCompany, initialJob]);
+
+  const companyForJob = useMemo(
+    () => companies.find((c) => c.id === job.companyId) || activeCompany,
+    [companies, job.companyId, activeCompany],
+  );
+
+  const computed = useMemo(() => calculateJob(job, companyForJob.rates), [job, companyForJob.rates]);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -73,8 +149,10 @@ export function JobForm({ onSubmit, rates, customRates }: Props) {
     try {
       await onSubmit(job);
       setStatus("Saved");
-      setJob(makeEmptyJob(rates, customRates));
-      setRawMessage("");
+      if (!initialJob) {
+        setJob(makeEmptyJob(companyForJob));
+        setRawMessage("");
+      }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not save");
     } finally {
@@ -110,8 +188,8 @@ export function JobForm({ onSubmit, rates, customRates }: Props) {
 
   const totalCharges = useMemo(() => calculateTotalCollected(job.charges), [job.charges]);
   const totalIncentive = useMemo(
-    () => calculateTotalIncentive(job.charges, rates, job.customIncentives || []),
-    [job.charges, rates, job.customIncentives],
+    () => calculateTotalIncentive(job.charges, companyForJob.rates, job.customIncentives || []),
+    [job.charges, companyForJob.rates, job.customIncentives],
   );
 
   return (
@@ -130,11 +208,11 @@ export function JobForm({ onSubmit, rates, customRates }: Props) {
           onClick={handleParse}
           className="self-start rounded-full border border-neutral-300 px-4 py-2 text-sm font-semibold text-neutral-800 transition hover:border-black hover:bg-black hover:text-white"
         >
-          Parse message
+          Autofill
         </button>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid gap-4 md:grid-cols-3">
         <div className="flex flex-col gap-2">
           <label className="text-xs font-semibold uppercase tracking-wide text-neutral-600">Date</label>
           <input
@@ -156,6 +234,17 @@ export function JobForm({ onSubmit, rates, customRates }: Props) {
             <option>Service</option>
             <option>Dismantle</option>
             <option>Inspection</option>
+          </select>
+        </div>
+        <div className="flex flex-col gap-2">
+          <label className="text-xs font-semibold uppercase tracking-wide text-neutral-600">Status</label>
+          <select
+            value={job.status || "pending"}
+            onChange={(event) => updateField("status", event.target.value)}
+            className="rounded-lg border border-neutral-200 px-3 py-2 text-sm font-medium text-neutral-900 outline-none transition focus:border-black"
+          >
+            <option value="pending">Pending</option>
+            <option value="completed">Completed</option>
           </select>
         </div>
       </div>
@@ -213,7 +302,43 @@ export function JobForm({ onSubmit, rates, customRates }: Props) {
           <span className="text-xs text-neutral-500">{chargesOpen ? "Hide" : "Show"}</span>
         </button>
         {chargesOpen && (
-          <div className="grid gap-4 border-t border-neutral-200 p-4 md:grid-cols-4">
+          <div className="flex flex-col gap-4 border-t border-neutral-200 p-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="flex flex-col gap-2">
+                <label className="text-xs font-semibold uppercase tracking-wide text-neutral-600">Incentive company</label>
+                <select
+                  value={job.companyId || activeCompany.id}
+                  onChange={(event) => {
+                    const id = event.target.value;
+                    onSelectCompany?.(id);
+                    const company = companies.find((c) => c.id === id) || activeCompany;
+                    setJob((current) => ({
+                      ...current,
+                      companyId: company.id,
+                      companyName: company.name,
+                      charges: {
+                        ...current.charges,
+                        insCharge: company.rates.insCharge,
+                        stand: company.rates.stand,
+                        whiteTape: company.rates.whiteTape,
+                        plugTop: company.rates.plugTop,
+                        piping: company.rates.piping,
+                      },
+                      customIncentives: syncCustomIncentives(current.customIncentives || [], company.customRates),
+                    }));
+                  }}
+                  className="rounded-lg border border-neutral-200 px-3 py-2 text-sm font-medium text-neutral-900 outline-none transition focus:border-black"
+                >
+                  {companies.map((company) => (
+                    <option key={company.id} value={company.id}>
+                      {company.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-4">
             <ChargeInput label="Ins charge" value={job.charges.insCharge} onChange={(value) => updateCharge("insCharge", value)} />
             <ChargeInput label="Stand" value={job.charges.stand} onChange={(value) => updateCharge("stand", value)} />
             <ChargeInput label="White tape" value={job.charges.whiteTape} onChange={(value) => updateCharge("whiteTape", value)} />
@@ -221,7 +346,7 @@ export function JobForm({ onSubmit, rates, customRates }: Props) {
             <ChargeInput label="Piping" value={job.charges.piping} onChange={(value) => updateCharge("piping", value)} />
             <ChargeInput label="Extra work" value={job.charges.extraWork} onChange={(value) => updateCharge("extraWork", value)} />
             <ChargeInput label="W/OW charge" value={job.charges.woOutdoorCharge} onChange={(value) => updateCharge("woOutdoorCharge", value)} />
-            <ChargeInput label="Amount paid" value={job.charges.amountPaid} onChange={(value) => updateCharge("amountPaid", value)} />
+            </div>
           </div>
         )}
       </div>
@@ -249,7 +374,7 @@ export function JobForm({ onSubmit, rates, customRates }: Props) {
         </div>
       </div>
 
-      {customRates.length > 0 && (
+      {companyForJob.customRates.length > 0 && (
         <div className="rounded-xl border border-neutral-200">
           <div className="flex items-center justify-between px-4 py-3 text-sm font-semibold text-neutral-800">
             <span>Custom incentives</span>
@@ -295,8 +420,17 @@ export function JobForm({ onSubmit, rates, customRates }: Props) {
           disabled={submitting}
           className="rounded-full bg-black px-5 py-2 text-sm font-semibold text-white shadow-md shadow-black/10 transition hover:-translate-y-0.5 hover:shadow-lg disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {submitting ? "Saving..." : "Add to table"}
+          {submitting ? "Saving..." : submitLabel}
         </button>
+        {onCancel && (
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-semibold text-neutral-800 transition hover:border-black hover:text-black"
+          >
+            Cancel
+          </button>
+        )}
         {status && <span className="text-sm font-medium text-neutral-600">{status}</span>}
       </div>
     </form>

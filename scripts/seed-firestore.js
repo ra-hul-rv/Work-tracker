@@ -42,7 +42,7 @@ const calc = (job) => {
     toNumber(c.extraWork) +
     toNumber(c.woOutdoorCharge);
 
-  const balanceToBePaid = totalCollected - toNumber(c.amountPaid);
+  const balanceToBePaid = totalCollected;
   const totalBalance = totalCollected - toNumber(job.helperSalary);
 
   let totalIncentive = 0;
@@ -73,7 +73,6 @@ const sampleJobs = [
       piping: 400,
       extraWork: 0,
       woOutdoorCharge: 0,
-      amountPaid: 1800,
     },
   },
   {
@@ -93,7 +92,6 @@ const sampleJobs = [
       piping: 200,
       extraWork: 200,
       woOutdoorCharge: 0,
-      amountPaid: 0,
     },
   },
   {
@@ -113,7 +111,6 @@ const sampleJobs = [
       piping: 0,
       extraWork: 500,
       woOutdoorCharge: 0,
-      amountPaid: 500,
     },
   },
   {
@@ -133,7 +130,6 @@ const sampleJobs = [
       piping: 600,
       extraWork: 200,
       woOutdoorCharge: 0,
-      amountPaid: 3000,
     },
   },
 ];

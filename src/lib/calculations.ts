@@ -17,8 +17,8 @@ export const calculateTotalCollected = (charges: Charges): number => {
   );
 };
 
-export const calculateBalanceToBePaid = (totalCollected: number, amountPaid: number): number => {
-  return totalCollected - toNumber(amountPaid);
+export const calculateBalanceToBePaid = (totalCollected: number): number => {
+  return totalCollected;
 };
 
 export const calculateTotalBalance = (totalCollected: number, helperSalary: number): number => {
@@ -45,7 +45,7 @@ export const calculateTotalIncentive = (charges: Charges, rates: IncentiveRates,
 
 export const calculateJob = (job: JobInput, rates: IncentiveRates): JobRecord => {
   const totalCollected = calculateTotalCollected(job.charges);
-  const balanceToBePaid = calculateBalanceToBePaid(totalCollected, job.charges.amountPaid);
+  const balanceToBePaid = calculateBalanceToBePaid(totalCollected);
   const totalBalance = calculateTotalBalance(totalCollected, job.helperSalary);
   const totalIncentive = calculateTotalIncentive(job.charges, rates, job.customIncentives || []);
 

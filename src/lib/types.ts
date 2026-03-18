@@ -12,6 +12,13 @@ export type CustomIncentive = {
   applied: boolean;
 };
 
+export type IncentiveCompany = {
+  id: string;
+  name: string;
+  rates: IncentiveRates;
+  customRates: Array<{ label: string; value: number }>;
+};
+
 export type Charges = {
   insCharge: number;
   stand: number;
@@ -20,7 +27,6 @@ export type Charges = {
   piping: number;
   extraWork: number;
   woOutdoorCharge: number;
-  amountPaid: number;
 };
 
 export type JobInput = {
@@ -32,6 +38,9 @@ export type JobInput = {
   acDetails: string;
   helper: string;
   helperSalary: number;
+  status?: "pending" | "completed";
+  companyId?: string;
+  companyName?: string;
   charges: Charges;
   customIncentives?: CustomIncentive[];
 };
@@ -61,5 +70,4 @@ export const CHARGE_KEYS: Array<keyof Charges> = [
   "piping",
   "extraWork",
   "woOutdoorCharge",
-  "amountPaid",
 ];
