@@ -17,22 +17,22 @@ export const calculateTotalCollected = (charges: Charges): number => {
   );
 };
 
-export const calculateBalanceToBePaid = (totalCollected: number): number => {
-  return totalCollected;
+export const calculateBalanceToBePaid = (totalCollected: number, totalIncentive: number): number => {
+  return totalCollected - totalIncentive;
 };
 
-export const calculateTotalBalance = (totalCollected: number, helperSalary: number): number => {
-  return totalCollected - toNumber(helperSalary);
+export const calculateTotalBalance = (totalIncentive: number, helperSalary: number): number => {
+  return totalIncentive - toNumber(helperSalary);
 };
 
 export const calculateTotalIncentive = (charges: Charges, rates: IncentiveRates, customIncentives: CustomIncentive[] = []): number => {
   let total = 0;
 
-  if (toNumber(charges.insCharge) > 0) total += rates.insCharge;
-  if (toNumber(charges.stand) > 0) total += rates.stand;
-  if (toNumber(charges.whiteTape) > 0) total += rates.whiteTape;
-  if (toNumber(charges.plugTop) > 0) total += rates.plugTop;
-  if (toNumber(charges.piping) > 0) total += rates.piping;
+  if (toNumber(charges.insCharge) > 0) total += toNumber(rates.insCharge.incentive);
+  if (toNumber(charges.stand) > 0) total += toNumber(rates.stand.incentive);
+  if (toNumber(charges.whiteTape) > 0) total += toNumber(rates.whiteTape.incentive);
+  if (toNumber(charges.plugTop) > 0) total += toNumber(rates.plugTop.incentive);
+  if (toNumber(charges.piping) > 0) total += toNumber(rates.piping.incentive);
 
   customIncentives.forEach((item) => {
     if (item.applied && toNumber(item.amount) > 0) {
@@ -45,9 +45,9 @@ export const calculateTotalIncentive = (charges: Charges, rates: IncentiveRates,
 
 export const calculateJob = (job: JobInput, rates: IncentiveRates): JobRecord => {
   const totalCollected = calculateTotalCollected(job.charges);
-  const balanceToBePaid = calculateBalanceToBePaid(totalCollected);
-  const totalBalance = calculateTotalBalance(totalCollected, job.helperSalary);
   const totalIncentive = calculateTotalIncentive(job.charges, rates, job.customIncentives || []);
+  const balanceToBePaid = calculateBalanceToBePaid(totalCollected, totalIncentive);
+  const totalBalance = calculateTotalBalance(totalIncentive, job.helperSalary);
 
   return {
     ...job,

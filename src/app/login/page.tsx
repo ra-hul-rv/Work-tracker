@@ -56,7 +56,7 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-neutral-50 via-white to-slate-100 px-6">
       <div className="w-full max-w-md rounded-2xl border border-neutral-200 bg-white/80 p-8 text-neutral-900 shadow-xl shadow-black/10">
         <p className="text-xs uppercase tracking-[0.2em] text-neutral-500">Access</p>
-        <h1 className="mt-2 text-2xl font-semibold">Sign in to AC Work Tracker</h1>
+        <h1 className="mt-2 text-2xl font-semibold">Sign in to CoolTrack</h1>
         {!isFirebaseConfigured && (
           <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
             Add Firebase environment variables to enable authentication.

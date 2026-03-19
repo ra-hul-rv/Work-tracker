@@ -6,9 +6,23 @@ type Props = {
   jobs: JobRecord[];
   loading?: boolean;
   onEdit: (job: JobRecord) => void;
+  onDelete: (job: JobRecord) => void;
 };
 
-export function JobTable({ jobs, loading = false, onEdit }: Props) {
+const formatDate = (raw: string) => {
+  const parts = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const parsed = parts
+    ? new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]))
+    : new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return raw;
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  }).format(parsed);
+};
+
+export function JobTable({ jobs, loading = false, onEdit, onDelete }: Props) {
   return (
     <div className="w-full overflow-auto rounded-2xl border border-neutral-200 bg-white/80 shadow-lg shadow-black/5">
       <table className="w-full min-w-[960px] border-collapse text-sm">
@@ -25,7 +39,7 @@ export function JobTable({ jobs, loading = false, onEdit }: Props) {
             <th className="bg-green-50 px-3 py-3">Total incentive</th>
             <th className="bg-rose-50 px-3 py-3">Balance to be paid</th>
             <th className="px-3 py-3">Total balance</th>
-            <th className="px-3 py-3">Status</th>
+            <th className="px-3 py-3">Payment status</th>
             <th className="px-3 py-3">Actions</th>
           </tr>
         </thead>
@@ -47,13 +61,13 @@ export function JobTable({ jobs, loading = false, onEdit }: Props) {
           {jobs.map((job, index) => (
             <tr
               key={job.id ?? index}
-              className={`border-t border-neutral-200 align-top ${job.status === "completed" ? "" : "bg-amber-50/40"}`}
+              className={`border-t border-neutral-200 align-top ${job.status === "received" ? "" : "bg-amber-50/40"}`}
             >
               <td className="px-3 py-3 text-neutral-600">{index + 1}</td>
-              <td className="px-3 py-3 text-neutral-800">{job.date}</td>
+              <td className="px-3 py-3 text-neutral-800">{formatDate(job.date)}</td>
               <td className="px-3 py-3">
                 <div className="font-semibold text-neutral-900">{job.customerName}</div>
-                <div className="text-xs text-neutral-500">{job.acDetails}</div>
+                <div className="text-xs text-neutral-500">{job.brand || "—"}</div>
               </td>
               <td className="px-3 py-3 text-neutral-800">{job.contact}</td>
               <td className="px-3 py-3 text-neutral-700">
@@ -99,17 +113,25 @@ export function JobTable({ jobs, loading = false, onEdit }: Props) {
                 <strong>₹{job.totalBalance.toLocaleString()}</strong>
               </td>
               <td className="px-3 py-3 text-neutral-800">
-                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${job.status === "completed" ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>
-                  {job.status === "completed" ? "Completed" : "Pending"}
+                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${job.status === "received" ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>
+                  {job.status === "received" ? "Received" : "Pending"}
                 </span>
               </td>
               <td className="px-3 py-3">
-                <button
-                  onClick={() => onEdit(job)}
-                  className="rounded-full border border-neutral-300 px-3 py-1 text-xs font-semibold text-neutral-700 hover:border-black hover:text-black"
-                >
-                  Edit
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => onEdit(job)}
+                    className="rounded-full border border-neutral-300 px-3 py-1 text-xs font-semibold text-neutral-700 hover:border-black hover:text-black"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={() => onDelete(job)}
+                    className="rounded-full border border-red-200 px-3 py-1 text-xs font-semibold text-red-700 hover:border-red-500 hover:text-red-800"
+                  >
+                    Delete
+                  </button>
+                </div>
               </td>
             </tr>
           ))}

@@ -2,7 +2,7 @@ type ParsedDetails = {
   customerName: string;
   contact: string;
   location: string;
-  acDetails: string;
+  brand: string;
 };
 
 const clean = (value: string) => value.trim().replace(/\s+/g, " ");
@@ -14,7 +14,7 @@ export const parseWorkDetails = (raw: string): ParsedDetails => {
     .filter((line) => line.length > 0);
 
   if (lines.length === 0) {
-    return { customerName: "", contact: "", location: "", acDetails: "" };
+    return { customerName: "", contact: "", location: "", brand: "" };
   }
 
   const firstLine = lines[0];
@@ -39,12 +39,12 @@ export const parseWorkDetails = (raw: string): ParsedDetails => {
   }
 
   const location = middle.join(" ");
-  const acDetails = lastLine;
+  const brand = lastLine;
 
   return {
     customerName,
     contact,
     location,
-    acDetails,
+    brand,
   };
 };

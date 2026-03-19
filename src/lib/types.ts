@@ -1,9 +1,14 @@
+export type IncentiveRate = {
+  originalPrice: number;
+  incentive: number;
+};
+
 export type IncentiveRates = {
-  insCharge: number;
-  stand: number;
-  whiteTape: number;
-  plugTop: number;
-  piping: number;
+  insCharge: IncentiveRate;
+  stand: IncentiveRate;
+  whiteTape: IncentiveRate;
+  plugTop: IncentiveRate;
+  piping: IncentiveRate;
 };
 
 export type CustomIncentive = {
@@ -16,7 +21,12 @@ export type IncentiveCompany = {
   id: string;
   name: string;
   rates: IncentiveRates;
-  customRates: Array<{ label: string; value: number }>;
+  customRates: Array<{ label: string; incentive: number }>;
+};
+
+export type WorkType = {
+  id: string;
+  name: string;
 };
 
 export type Charges = {
@@ -35,10 +45,11 @@ export type JobInput = {
   customerName: string;
   location: string;
   contact: string;
-  acDetails: string;
+  brand: string;
+  acDetails?: string;
   helper: string;
   helperSalary: number;
-  status?: "pending" | "completed";
+  status?: "pending" | "received";
   companyId?: string;
   companyName?: string;
   charges: Charges;
@@ -55,11 +66,11 @@ export type JobRecord = JobInput & {
 };
 
 export const INCENTIVE_RATES: IncentiveRates = {
-  insCharge: 900,
-  stand: 500,
-  whiteTape: 50,
-  plugTop: 150,
-  piping: 200,
+  insCharge: { originalPrice: 900, incentive: 900 },
+  stand: { originalPrice: 500, incentive: 500 },
+  whiteTape: { originalPrice: 50, incentive: 50 },
+  plugTop: { originalPrice: 150, incentive: 150 },
+  piping: { originalPrice: 200, incentive: 200 },
 };
 
 export const CHARGE_KEYS: Array<keyof Charges> = [

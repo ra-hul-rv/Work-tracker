@@ -10,6 +10,8 @@ Requirements:
 This writes to the "jobs" collection. Adjust rules accordingly.
 */
 
+/* eslint-disable @typescript-eslint/no-require-imports */
+
 const admin = require("firebase-admin");
 const path = require("path");
 
@@ -42,15 +44,15 @@ const calc = (job) => {
     toNumber(c.extraWork) +
     toNumber(c.woOutdoorCharge);
 
-  const balanceToBePaid = totalCollected;
-  const totalBalance = totalCollected - toNumber(job.helperSalary);
-
   let totalIncentive = 0;
   if (toNumber(c.insCharge) > 0) totalIncentive += rates.insCharge;
   if (toNumber(c.stand) > 0) totalIncentive += rates.stand;
   if (toNumber(c.whiteTape) > 0) totalIncentive += rates.whiteTape;
   if (toNumber(c.plugTop) > 0) totalIncentive += rates.plugTop;
   if (toNumber(c.piping) > 0) totalIncentive += rates.piping;
+
+  const balanceToBePaid = totalCollected - totalIncentive;
+  const totalBalance = totalIncentive - toNumber(job.helperSalary);
 
   return { ...job, totalCollected, balanceToBePaid, totalBalance, totalIncentive };
 };
@@ -62,7 +64,7 @@ const sampleJobs = [
     customerName: "Sathya Narayana Prasad",
     location: "Aluva SN Puram Vainavelil, Thaikkattukara",
     contact: "7736222759",
-    acDetails: "Voltas SAC 1T 3S INV 123V Vertis Magnum",
+    brand: "Voltas SAC 1T 3S INV 123V Vertis Magnum",
     helper: "Anand",
     helperSalary: 1320,
     charges: {
@@ -81,7 +83,7 @@ const sampleJobs = [
     customerName: "Excel Example Row",
     location: "Demo Lane",
     contact: "9876543210",
-    acDetails: "Reference to Excel doc example",
+    brand: "Reference to Excel doc example",
     helper: "Helper A",
     helperSalary: 1320,
     charges: {
@@ -100,7 +102,7 @@ const sampleJobs = [
     customerName: "Ayesha Homes",
     location: "Kakkanad Info Park Road",
     contact: "9876501234",
-    acDetails: "LG Split AC service",
+    brand: "LG Split AC service",
     helper: "Ravi",
     helperSalary: 800,
     charges: {
@@ -119,7 +121,7 @@ const sampleJobs = [
     customerName: "Thomas Villa",
     location: "Edappally",
     contact: "9012309876",
-    acDetails: "Daikin 1.5T inverter",
+    brand: "Daikin 1.5T inverter",
     helper: "Manu",
     helperSalary: 1000,
     charges: {
