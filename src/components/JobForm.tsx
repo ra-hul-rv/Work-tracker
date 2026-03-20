@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { calculateTotalCollected, calculateTotalIncentive } from "../lib/calculations";
-import { CustomIncentive, Helper, IncentiveCompany, IncentiveRates, JobInput, JobStatus, WorkType } from "../lib/types";
+import { CustomIncentive, Helper, INCENTIVE_RATES, IncentiveCompany, IncentiveRates, JobInput, JobStatus, WorkType } from "../lib/types";
 import { parseWorkDetails } from "../lib/parser";
 
 const EMPTY_COMPANY: IncentiveCompany = {
@@ -37,7 +37,7 @@ const BASE_RATE_ROWS: Array<{ key: keyof JobInput["charges"]; label: string; inc
 
 const syncCustomIncentives = (
   existing: CustomIncentive[] = [],
-  customRates: Array<{ label: string; incentive: number }> = [],
+  customRates: Array<{ label: string; originalPrice: number; incentive: number }> = [],
 ): CustomIncentive[] => {
   const next = [...existing];
   customRates.forEach((item) => {
@@ -59,6 +59,13 @@ const cloneRates = (rates: IncentiveRates): IncentiveRates => ({
   piping: { ...rates.piping },
 });
 
+const getRateKey = (typeName: string) => typeName.trim().toLowerCase();
+
+const resolveCompanyRatesForType = (company: IncentiveCompany, typeName: string): IncentiveRates => {
+  const key = getRateKey(typeName);
+  return company.typeRates?.[key] || INCENTIVE_RATES;
+};
+
 const getDefaultTypeName = (workTypes: WorkType[]) => {
   const found = workTypes.find((item) => item.name.trim().toLowerCase() === "installation");
   return found?.name || workTypes[0]?.name || "Installation";
@@ -69,31 +76,35 @@ const normalizeStatus = (status: JobInput["status"]): JobStatus => {
   return "pending";
 };
 
-const makeEmptyJob = (company: IncentiveCompany, workTypes: WorkType[]): JobInput => ({
-  date: new Date().toISOString().slice(0, 10),
-  type: getDefaultTypeName(workTypes),
-  status: "pending",
-  amountToGet: 0,
-  customerName: "",
-  location: "",
-  contact: "",
-  brand: "",
-  helper: "",
-  helperSalary: 0,
-  companyId: company.id,
-  companyName: company.name,
-  jobRates: cloneRates(company.rates),
-  charges: {
-    insCharge: company.rates.insCharge.originalPrice,
-    stand: company.rates.stand.originalPrice,
-    whiteTape: company.rates.whiteTape.originalPrice,
-    plugTop: company.rates.plugTop.originalPrice,
-    piping: company.rates.piping.originalPrice,
-    extraWork: 0,
-    woOutdoorCharge: 0,
-  },
-  customIncentives: syncCustomIncentives([], company.customRates),
-});
+const makeEmptyJob = (company: IncentiveCompany, workTypes: WorkType[]): JobInput => {
+  const type = getDefaultTypeName(workTypes);
+  const rates = resolveCompanyRatesForType(company, type);
+  return {
+    date: new Date().toISOString().slice(0, 10),
+    type,
+    status: "pending",
+    amountToGet: 0,
+    customerName: "",
+    location: "",
+    contact: "",
+    brand: "",
+    helper: "",
+    helperSalary: 0,
+    companyId: company.id,
+    companyName: company.name,
+    jobRates: cloneRates(rates),
+    charges: {
+      insCharge: rates.insCharge.originalPrice,
+      stand: rates.stand.originalPrice,
+      whiteTape: rates.whiteTape.originalPrice,
+      plugTop: rates.plugTop.originalPrice,
+      piping: rates.piping.originalPrice,
+      extraWork: 0,
+      woOutdoorCharge: 0,
+    },
+    customIncentives: syncCustomIncentives([], company.customRates),
+  };
+};
 
 const numberOrZero = (value: string) => {
   if (value.trim() === "") return 0;
@@ -140,6 +151,7 @@ export function JobForm({
   const [job, setJob] = useState<JobInput>(() => {
     if (initialJob) {
       const company = companies.find((c) => c.id === (initialJob.companyId || selectedCompanyId)) || activeCompany;
+      const selectedType = initialJob.type || getDefaultTypeName(workTypes.length > 0 ? workTypes : DEFAULT_WORK_TYPES);
       return {
         ...initialJob,
         status: normalizeStatus(initialJob.status),
@@ -147,7 +159,7 @@ export function JobForm({
         brand: initialJob.brand || "",
         companyId: company.id,
         companyName: company.name,
-        jobRates: cloneRates(initialJob.jobRates || company.rates),
+        jobRates: cloneRates(initialJob.jobRates || resolveCompanyRatesForType(company, selectedType)),
         customIncentives: syncCustomIncentives(initialJob.customIncentives || [], company.customRates),
       };
     }
@@ -160,6 +172,7 @@ export function JobForm({
   useEffect(() => {
     if (initialJob) {
       const company = companies.find((c) => c.id === (initialJob.companyId || selectedCompanyId)) || activeCompany;
+      const selectedType = initialJob.type || getDefaultTypeName(workTypes.length > 0 ? workTypes : DEFAULT_WORK_TYPES);
       setJob({
         ...initialJob,
         status: normalizeStatus(initialJob.status),
@@ -167,7 +180,7 @@ export function JobForm({
         brand: initialJob.brand || "",
         companyId: company.id,
         companyName: company.name,
-        jobRates: cloneRates(initialJob.jobRates || company.rates),
+        jobRates: cloneRates(initialJob.jobRates || resolveCompanyRatesForType(company, selectedType)),
         customIncentives: syncCustomIncentives(initialJob.customIncentives || [], company.customRates),
       });
       return;
@@ -175,15 +188,16 @@ export function JobForm({
     setJob((current) => {
       const company = companies.find((c) => c.id === (current.companyId || selectedCompanyId)) || activeCompany;
       const nextCustom = syncCustomIncentives(current.customIncentives || [], company.customRates);
+      const resolvedRates = resolveCompanyRatesForType(company, current.type || getDefaultTypeName(workTypes.length > 0 ? workTypes : DEFAULT_WORK_TYPES));
       return {
         ...current,
         companyId: company.id,
         companyName: company.name,
-        jobRates: current.jobRates || cloneRates(company.rates),
+        jobRates: current.jobRates || cloneRates(resolvedRates),
         customIncentives: nextCustom,
       };
     });
-  }, [initialJob, companies, selectedCompanyId, activeCompany]);
+  }, [initialJob, companies, selectedCompanyId, activeCompany, workTypes]);
 
   useEffect(() => {
     if (!initialJob) {
@@ -196,9 +210,24 @@ export function JobForm({
     setJob((current) => {
       const exists = workTypes.some((item) => item.name === current.type);
       if (exists) return current;
-      return { ...current, type: getDefaultTypeName(workTypes) };
+      const company = companies.find((c) => c.id === (current.companyId || selectedCompanyId)) || activeCompany;
+      const nextType = getDefaultTypeName(workTypes);
+      const rates = resolveCompanyRatesForType(company, nextType);
+      return {
+        ...current,
+        type: nextType,
+        jobRates: cloneRates(rates),
+        charges: {
+          ...current.charges,
+          insCharge: rates.insCharge.originalPrice,
+          stand: rates.stand.originalPrice,
+          whiteTape: rates.whiteTape.originalPrice,
+          plugTop: rates.plugTop.originalPrice,
+          piping: rates.piping.originalPrice,
+        },
+      };
     });
-  }, [initialJob, workTypes]);
+  }, [initialJob, workTypes, companies, selectedCompanyId, activeCompany]);
 
   const companyForJob = useMemo(
     () => companies.find((c) => c.id === job.companyId) || activeCompany,
@@ -252,6 +281,27 @@ export function JobForm({
       return;
     }
 
+    if (field === "type") {
+      setJob((current) => {
+        const company = companies.find((c) => c.id === (current.companyId || selectedCompanyId)) || activeCompany;
+        const rates = resolveCompanyRatesForType(company, value);
+        return {
+          ...current,
+          type: value,
+          jobRates: cloneRates(rates),
+          charges: {
+            ...current.charges,
+            insCharge: rates.insCharge.originalPrice,
+            stand: rates.stand.originalPrice,
+            whiteTape: rates.whiteTape.originalPrice,
+            plugTop: rates.plugTop.originalPrice,
+            piping: rates.piping.originalPrice,
+          },
+        };
+      });
+      return;
+    }
+
     if (field === "status") {
       const nextStatus = normalizeStatus(value as JobStatus);
       setJob((current) => ({
@@ -267,7 +317,7 @@ export function JobForm({
 
   const updateIncentive = (key: keyof IncentiveRates, value: string) => {
     setJob((current) => {
-      const baseRates = current.jobRates || cloneRates(companyForJob.rates);
+      const baseRates = current.jobRates || cloneRates(resolveCompanyRatesForType(companyForJob, current.type));
       return {
         ...current,
         jobRates: {
@@ -283,8 +333,8 @@ export function JobForm({
 
   const totalCharges = useMemo(() => calculateTotalCollected(job.charges), [job.charges]);
   const totalIncentive = useMemo(
-    () => calculateTotalIncentive(job.charges, job.jobRates || companyForJob.rates, job.customIncentives || []),
-    [job.charges, job.jobRates, companyForJob.rates, job.customIncentives],
+    () => calculateTotalIncentive(job.charges, job.jobRates || resolveCompanyRatesForType(companyForJob, job.type), job.customIncentives || []),
+    [job.charges, job.jobRates, companyForJob, job.type, job.customIncentives],
   );
 
   const helperOptions = useMemo(() => {
@@ -415,21 +465,24 @@ export function JobForm({
                     const id = event.target.value;
                     onSelectCompany?.(id);
                     const company = companies.find((c) => c.id === id) || activeCompany;
-                    setJob((current) => ({
-                      ...current,
-                      companyId: company.id,
-                      companyName: company.name,
-                      jobRates: cloneRates(company.rates),
-                      charges: {
-                        ...current.charges,
-                        insCharge: company.rates.insCharge.originalPrice,
-                        stand: company.rates.stand.originalPrice,
-                        whiteTape: company.rates.whiteTape.originalPrice,
-                        plugTop: company.rates.plugTop.originalPrice,
-                        piping: company.rates.piping.originalPrice,
-                      },
-                      customIncentives: syncCustomIncentives(current.customIncentives || [], company.customRates),
-                    }));
+                    setJob((current) => {
+                      const rates = resolveCompanyRatesForType(company, current.type);
+                      return {
+                        ...current,
+                        companyId: company.id,
+                        companyName: company.name,
+                        jobRates: cloneRates(rates),
+                        charges: {
+                          ...current.charges,
+                          insCharge: rates.insCharge.originalPrice,
+                          stand: rates.stand.originalPrice,
+                          whiteTape: rates.whiteTape.originalPrice,
+                          plugTop: rates.plugTop.originalPrice,
+                          piping: rates.piping.originalPrice,
+                        },
+                        customIncentives: syncCustomIncentives(current.customIncentives || [], company.customRates),
+                      };
+                    });
                   }}
                   className="rounded-lg border border-neutral-200 px-3 py-2 text-sm font-medium text-neutral-900 outline-none transition focus:border-black"
                 >
@@ -454,7 +507,7 @@ export function JobForm({
                 <tbody>
                   {BASE_RATE_ROWS.map((row) => {
                     const incentive = row.incentiveKey
-                      ? (job.jobRates?.[row.incentiveKey]?.incentive ?? companyForJob.rates[row.incentiveKey].incentive)
+                      ? (job.jobRates?.[row.incentiveKey]?.incentive ?? resolveCompanyRatesForType(companyForJob, job.type)[row.incentiveKey].incentive)
                       : 0;
                     const chargeValue = job.charges[row.key];
                     const showIncentiveInput = row.incentiveKey
@@ -514,7 +567,7 @@ export function JobForm({
           </select>
         </div>
         <div className="flex flex-col gap-2">
-          <label className="text-xs font-semibold uppercase tracking-wide text-neutral-600">Payment amount</label>
+          <label className="text-xs font-semibold uppercase tracking-wide text-neutral-600">Helper salary</label>
           <input
             type="number"
             value={toInputNumberValue(job.helperSalary)}

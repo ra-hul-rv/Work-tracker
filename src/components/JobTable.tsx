@@ -208,7 +208,7 @@ export function JobTable({ jobs, loading = false, onEdit, onDelete }: Props) {
             </th>
             <th className="bg-rose-50 px-3 py-3">
               <button type="button" onClick={() => toggleSort("balanceToBePaid")} className="flex w-full items-center gap-1 text-left">
-                <span>Payment amount</span>
+                <span>Balance to be paid</span>
                 <span className="text-[10px]">{sortIndicator("balanceToBePaid")}</span>
               </button>
             </th>

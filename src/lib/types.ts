@@ -21,7 +21,8 @@ export type IncentiveCompany = {
   id: string;
   name: string;
   rates: IncentiveRates;
-  customRates: Array<{ label: string; incentive: number }>;
+  typeRates?: Record<string, IncentiveRates>;
+  customRates: Array<{ label: string; originalPrice: number; incentive: number }>;
 };
 
 export type WorkType = {

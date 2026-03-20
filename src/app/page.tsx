@@ -74,6 +74,51 @@ const normalizeRates = (raw: Record<string, unknown> | undefined): IncentiveRate
   };
 };
 
+const getRateKey = (typeName: string) => typeName.trim().toLowerCase();
+
+const cloneRates = (rates: IncentiveRates): IncentiveRates => ({
+  insCharge: { ...rates.insCharge },
+  stand: { ...rates.stand },
+  whiteTape: { ...rates.whiteTape },
+  plugTop: { ...rates.plugTop },
+  piping: { ...rates.piping },
+});
+
+const getDefaultIncentiveRates = (): IncentiveRates => normalizeRates(INCENTIVE_RATES);
+
+const buildTypeRatesFromWorkTypes = (workTypes: WorkType[], baseRates: IncentiveRates): Record<string, IncentiveRates> => {
+  const next: Record<string, IncentiveRates> = {};
+  workTypes.forEach((type) => {
+    next[getRateKey(type.name)] = cloneRates(baseRates);
+  });
+  return next;
+};
+
+const normalizeTypeRates = (
+  raw: Record<string, unknown> | undefined,
+  workTypes: WorkType[],
+): Record<string, IncentiveRates> => {
+  const next: Record<string, IncentiveRates> = {};
+
+  Object.entries(raw || {}).forEach(([key, value]) => {
+    next[getRateKey(key)] = normalizeRates(asRecord(value));
+  });
+
+  workTypes.forEach((type) => {
+    const key = getRateKey(type.name);
+    if (!next[key]) {
+      next[key] = cloneRates(getDefaultIncentiveRates());
+    }
+  });
+
+  return next;
+};
+
+const resolveCompanyRatesForType = (company: IncentiveCompany, typeName: string): IncentiveRates => {
+  const key = getRateKey(typeName);
+  return company.typeRates?.[key] || getDefaultIncentiveRates();
+};
+
 export default function HomePage() {
   const [jobs, setJobs] = useState<JobRecord[]>([]);
   const [loading, setLoading] = useState(Boolean(db));
@@ -85,6 +130,13 @@ export default function HomePage() {
   const [workTypes, setWorkTypes] = useState<WorkType[]>(DEFAULT_WORK_TYPES);
   const [helpers, setHelpers] = useState<Helper[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const [filterCompanyId, setFilterCompanyId] = useState("all");
+  const [filterType, setFilterType] = useState("all");
+  const [filterHelper, setFilterHelper] = useState("all");
+  const [filterStatus, setFilterStatus] = useState<"all" | "pending" | "received" | "to_get">("all");
+  const [filterFromDate, setFilterFromDate] = useState("");
+  const [filterToDate, setFilterToDate] = useState("");
+  const [filterModalOpen, setFilterModalOpen] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editJob, setEditJob] = useState<JobRecord | null>(null);
   const [deleteJobTarget, setDeleteJobTarget] = useState<JobRecord | null>(null);
@@ -117,10 +169,12 @@ export default function HomePage() {
     const unsubscribe = onSnapshot(
       q,
       async (snapshot) => {
+        const availableTypes = workTypes.length > 0 ? workTypes : DEFAULT_WORK_TYPES;
         if (snapshot.empty) {
           await setDoc(doc(firestore, "incentiveCompanies", DEFAULT_COMPANY.id), {
             ...DEFAULT_COMPANY,
             rates: normalizeRates(DEFAULT_COMPANY.rates),
+            typeRates: buildTypeRatesFromWorkTypes(availableTypes, normalizeRates(DEFAULT_COMPANY.rates)),
             createdAt: Date.now(),
             createdAtServer: serverTimestamp(),
           });
@@ -130,15 +184,18 @@ export default function HomePage() {
         const next = snapshot.docs.map((document) => {
           const data = asRecord(document.data());
           const customRatesRaw = Array.isArray(data.customRates) ? data.customRates : [];
+          const baseRates = normalizeRates(asRecord(data.rates));
           return {
             id: document.id,
             name: typeof data.name === "string" && data.name.trim() ? data.name : "Unnamed",
-            rates: normalizeRates(asRecord(data.rates)),
+            rates: baseRates,
+            typeRates: normalizeTypeRates(asRecord(data.typeRates), availableTypes),
             customRates: customRatesRaw
               .map((item) => {
                 const itemRecord = asRecord(item);
                 return {
                   label: typeof itemRecord.label === "string" ? itemRecord.label : "",
+                  originalPrice: toNumber(itemRecord.originalPrice ?? itemRecord.original ?? 0),
                   incentive: toNumber(itemRecord.incentive ?? itemRecord.value),
                 };
               })
@@ -154,7 +211,7 @@ export default function HomePage() {
     );
 
     return () => unsubscribe();
-  }, [user, requiresAuth]);
+  }, [user, requiresAuth, workTypes]);
 
   useEffect(() => {
     const firestore = db;
@@ -342,7 +399,10 @@ export default function HomePage() {
     if (auth && !user) throw new Error("Login to add jobs.");
 
     const company = companies.find((c) => c.id === job.companyId) || activeCompany || DEFAULT_COMPANY;
-    const record = calculateJob({ ...job, companyId: company.id, companyName: company.name }, job.jobRates || company.rates);
+    const record = calculateJob(
+      { ...job, companyId: company.id, companyName: company.name },
+      job.jobRates || resolveCompanyRatesForType(company, job.type),
+    );
     await addDoc(collection(db!, "jobs"), {
       ...record,
       createdAt: Date.now(),
@@ -355,7 +415,10 @@ export default function HomePage() {
     if (auth && !user) throw new Error("Login to edit jobs.");
 
     const company = companies.find((c) => c.id === job.companyId) || activeCompany || DEFAULT_COMPANY;
-    const record = calculateJob({ ...job, companyId: company.id, companyName: company.name }, job.jobRates || company.rates);
+    const record = calculateJob(
+      { ...job, companyId: company.id, companyName: company.name },
+      job.jobRates || resolveCompanyRatesForType(company, job.type),
+    );
     await updateDoc(doc(db!, "jobs", id), {
       ...record,
       updatedAt: Date.now(),
@@ -373,11 +436,14 @@ export default function HomePage() {
     setCompanies((prev) => prev.map((c) => (c.id === next.id ? next : c)));
     if (!db) return;
     if (auth && !user) throw new Error("Login to edit companies.");
+    const normalizedRates = normalizeRates(next.rates);
+    const availableTypes = workTypes.length > 0 ? workTypes : DEFAULT_WORK_TYPES;
     await setDoc(
       doc(db, "incentiveCompanies", next.id),
       {
         ...next,
-        rates: normalizeRates(next.rates),
+        rates: normalizedRates,
+        typeRates: normalizeTypeRates(asRecord(next.typeRates), availableTypes),
         updatedAt: Date.now(),
         updatedAtServer: serverTimestamp(),
       },
@@ -389,10 +455,13 @@ export default function HomePage() {
     const trimmed = name.trim();
     if (!trimmed) return;
     const id = `company-${Date.now()}`;
+    const normalizedRates = normalizeRates(INCENTIVE_RATES);
+    const availableTypes = workTypes.length > 0 ? workTypes : DEFAULT_WORK_TYPES;
     const company: IncentiveCompany = {
       id,
       name: trimmed,
-      rates: normalizeRates(INCENTIVE_RATES),
+      rates: normalizedRates,
+      typeRates: buildTypeRatesFromWorkTypes(availableTypes, normalizedRates),
       customRates: [],
     };
     setCompanies((prev) => [...prev, company]);
@@ -490,57 +559,115 @@ export default function HomePage() {
     await deleteDoc(doc(db, "helpers", id));
   };
 
-  const stats = useMemo(() => {
-    const pending = jobs.filter((job) => job.status !== "received");
-    const completed = jobs.filter((job) => job.status === "received");
-    const pendingPaymentAmount = pending.reduce((sum, job) => sum + (job.balanceToBePaid || 0), 0);
-    const helperTotalAmount = jobs.reduce((sum, job) => sum + (job.helperSalary || 0), 0);
-    return {
-      pendingPaymentCount: pending.length,
-      pendingPaymentAmount,
-      helperTotalAmount,
-      completedWorkCount: completed.length,
-    };
-  }, [jobs]);
+  const helperFilterOptions = useMemo(
+    () => Array.from(new Set(helpers.map((helper) => helper.name.trim()).filter((name) => name.length > 0))).sort((a, b) => a.localeCompare(b)),
+    [helpers],
+  );
 
   const filteredJobs = useMemo(() => {
     const queryText = searchQuery.trim().toLowerCase();
-    if (!queryText) return jobs;
+    const fromTime = filterFromDate ? new Date(filterFromDate).getTime() : null;
+    const toTime = filterToDate ? new Date(filterToDate).getTime() : null;
 
     return jobs.filter((job) => {
+      if (filterCompanyId !== "all" && job.companyId !== filterCompanyId) return false;
+      if (filterType !== "all" && job.type !== filterType) return false;
+      if (filterHelper !== "all" && (job.helper || "") !== filterHelper) return false;
+      if (filterStatus !== "all" && (job.status || "pending") !== filterStatus) return false;
+
+      if (fromTime !== null || toTime !== null) {
+        const jobTime = new Date(job.date).getTime();
+        if (!Number.isFinite(jobTime)) return false;
+        if (fromTime !== null && jobTime < fromTime) return false;
+        if (toTime !== null && jobTime > toTime) return false;
+      }
+
+      if (!queryText) return true;
+
       const fields = [job.customerName, job.location, job.contact, job.type, job.brand, job.companyName]
         .filter(Boolean)
         .map((value) => String(value).toLowerCase());
       return fields.some((field) => field.includes(queryText));
     });
-  }, [jobs, searchQuery]);
+  }, [jobs, searchQuery, filterCompanyId, filterType, filterHelper, filterStatus, filterFromDate, filterToDate]);
+
+  const stats = useMemo(() => {
+    const pending = filteredJobs.filter((job) => job.status !== "received");
+    const pendingPaymentAmount = pending.reduce((sum, job) => sum + (job.balanceToBePaid || 0), 0);
+    const helperTotalAmount = filteredJobs.reduce((sum, job) => sum + (job.helperSalary || 0), 0);
+    return {
+      pendingPaymentCount: pending.length,
+      pendingPaymentAmount,
+      helperTotalAmount,
+      totalWorks: filteredJobs.length,
+    };
+  }, [filteredJobs]);
+
+  const hasActiveFilters =
+    filterCompanyId !== "all" ||
+    filterType !== "all" ||
+    filterHelper !== "all" ||
+    filterStatus !== "all" ||
+    Boolean(filterFromDate) ||
+    Boolean(filterToDate);
+
+  const activeFilterCount =
+    Number(filterCompanyId !== "all") +
+    Number(filterType !== "all") +
+    Number(filterHelper !== "all") +
+    Number(filterStatus !== "all") +
+    Number(Boolean(filterFromDate || filterToDate));
+
+  const clearFilters = () => {
+    setFilterCompanyId("all");
+    setFilterType("all");
+    setFilterHelper("all");
+    setFilterStatus("all");
+    setFilterFromDate("");
+    setFilterToDate("");
+  };
 
   const header = (
-    <header className="flex flex-col gap-3 rounded-2xl bg-gradient-to-r from-blue-950 via-blue-900 to-cyan-800 px-8 py-6 text-white shadow-xl shadow-blue-950/30 md:flex-row md:items-center md:justify-between">
-      <div className="flex items-center gap-3">
-        <div className="rounded-xl border border-white/60 bg-white/95 px-3 py-2 shadow-md shadow-blue-950/20">
-          <Image
-            src="/freezezone.png"
-            alt="FreezeZone"
-            width={280}
-            height={86}
-            priority
-            unoptimized
-            className="h-14 w-auto object-contain"
-          />
+    <header className="rounded-3xl border border-white/50 bg-white/30 px-6 py-5 text-neutral-900 shadow-xl shadow-black/10 backdrop-blur-md md:px-8 md:py-6">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="flex items-center gap-3">
+          <div className="rounded-2xl border border-white/70 bg-white/55 px-4 py-3 shadow-sm backdrop-blur">
+            <div className="flex items-center gap-3">
+            <Image
+              src="/freezezone-logo.png"
+              alt="Freezezone logo"
+              width={64}
+              height={64}
+              priority
+              unoptimized
+              className="h-12 w-12 object-contain"
+            />
+            <Image
+              src="/freezezone-wordmark.png"
+              alt="Freezezone"
+              width={280}
+              height={63}
+              priority
+              unoptimized
+              className="h-9 w-auto object-contain"
+            />
+            </div>
+          </div>
         </div>
-      </div>
-      <div className="flex flex-col items-start gap-2 text-sm font-semibold text-white">
-        <span className="rounded-full bg-white/10 px-4 py-2">{user?.email ?? "Guest"}</span>
-        {auth ? (
-          user ? null : (
-            <Link href="/login" className="rounded-full bg-white px-4 py-2 text-black hover:-translate-y-0.5 hover:shadow-md">
-              Login to continue
-            </Link>
-          )
-        ) : (
-          <span className="text-white/80">Auth not configured</span>
-        )}
+        <div className="flex flex-col items-start gap-2 text-sm font-semibold text-neutral-800">
+          <div className="rounded-xl border border-white/70 bg-white/45 px-3 py-2 backdrop-blur">
+            <span className="rounded-full bg-white/50 px-4 py-2">{user?.email ?? "Guest"}</span>
+          </div>
+          {auth ? (
+            user ? null : (
+              <Link href="/login" className="rounded-full bg-black px-4 py-2 text-white transition hover:-translate-y-0.5 hover:shadow-md">
+                Login to continue
+              </Link>
+            )
+          ) : (
+            <span className="text-neutral-500">Auth not configured</span>
+          )}
+        </div>
       </div>
     </header>
   );
@@ -557,6 +684,7 @@ export default function HomePage() {
           {activeTab === "incentives" && (
             <IncentiveTable
               companies={companies}
+              workTypes={workTypes}
               selectedCompanyId={selectedCompanyId}
               onSelectCompany={setSelectedCompanyId}
               onUpdateCompany={updateCompany}
@@ -612,13 +740,28 @@ export default function HomePage() {
           <>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h2 className="text-lg font-semibold">Payment overview</h2>
-              <button
-                type="button"
-                onClick={() => setCreateModalOpen(true)}
-                className="rounded-full bg-black px-4 py-2 text-sm font-semibold text-white shadow-md shadow-black/10 transition hover:-translate-y-0.5 hover:shadow-lg"
-              >
-                Add work
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setFilterModalOpen(true)}
+                  className="inline-flex items-center gap-2 rounded-full border border-neutral-300 bg-white px-4 py-2 text-sm font-semibold text-neutral-800 transition hover:border-black"
+                >
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M3 5h18l-7 8v5l-4 2v-7L3 5z" />
+                  </svg>
+                  <span>Filters</span>
+                  {hasActiveFilters && (
+                    <span className="rounded-full bg-black px-2 py-0.5 text-[11px] font-bold text-white">{activeFilterCount}</span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCreateModalOpen(true)}
+                  className="rounded-full bg-black px-4 py-2 text-sm font-semibold text-white shadow-md shadow-black/10 transition hover:-translate-y-0.5 hover:shadow-lg"
+                >
+                  Add work
+                </button>
+              </div>
             </div>
 
             {!canWrite && auth && (
@@ -650,7 +793,7 @@ export default function HomePage() {
                   )}
                   <span className="text-sm text-neutral-600">
                     {filteredJobs.length}
-                    {searchQuery ? ` / ${jobs.length}` : ""} jobs
+                    {searchQuery || hasActiveFilters ? ` / ${jobs.length}` : ""} jobs
                   </span>
                 </div>
               </div>
@@ -669,19 +812,22 @@ export default function HomePage() {
               ) : (
                 <div className="rounded-2xl border border-neutral-200 bg-white/90 px-5 py-10 text-center shadow-sm shadow-black/5">
                   <p className="text-base font-semibold text-neutral-800">
-                    {searchQuery ? "No matching work entries" : "No work entries yet"}
+                    {searchQuery || hasActiveFilters ? "No matching work entries" : "No work entries yet"}
                   </p>
                   <p className="mt-1 text-sm text-neutral-600">
-                    {searchQuery ? "Try a different search keyword." : "Create your first work entry to get started."}
+                    {searchQuery || hasActiveFilters ? "Try changing filters or search keywords." : "Create your first work entry to get started."}
                   </p>
                   <div className="mt-4 flex items-center justify-center gap-2">
-                    {searchQuery ? (
+                    {searchQuery || hasActiveFilters ? (
                       <button
                         type="button"
-                        onClick={() => setSearchQuery("")}
+                        onClick={() => {
+                          setSearchQuery("");
+                          clearFilters();
+                        }}
                         className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-semibold text-neutral-800 hover:border-black"
                       >
-                        Clear search
+                        Clear filters
                       </button>
                     ) : (
                       <button
@@ -696,6 +842,107 @@ export default function HomePage() {
                 </div>
               )}
             </section>
+
+            {filterModalOpen && (
+              <Modal title="Filters" onClose={() => setFilterModalOpen(false)} maxWidthClass="max-w-2xl">
+                <div className="flex flex-col gap-4">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <label className="flex flex-col gap-2 text-xs font-semibold uppercase tracking-wide text-neutral-600">
+                      Company name
+                      <select
+                        value={filterCompanyId}
+                        onChange={(event) => setFilterCompanyId(event.target.value)}
+                        className="rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm font-medium normal-case text-neutral-800 outline-none transition focus:border-black"
+                      >
+                        <option value="all">All companies</option>
+                        {companies.map((company) => (
+                          <option key={company.id} value={company.id}>
+                            {company.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex flex-col gap-2 text-xs font-semibold uppercase tracking-wide text-neutral-600">
+                      Type
+                      <select
+                        value={filterType}
+                        onChange={(event) => setFilterType(event.target.value)}
+                        className="rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm font-medium normal-case text-neutral-800 outline-none transition focus:border-black"
+                      >
+                        <option value="all">All types</option>
+                        {workTypes.map((type) => (
+                          <option key={type.id} value={type.name}>
+                            {type.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex flex-col gap-2 text-xs font-semibold uppercase tracking-wide text-neutral-600">
+                      Labour
+                      <select
+                        value={filterHelper}
+                        onChange={(event) => setFilterHelper(event.target.value)}
+                        className="rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm font-medium normal-case text-neutral-800 outline-none transition focus:border-black"
+                      >
+                        <option value="all">All labours</option>
+                        {helperFilterOptions.map((helperName) => (
+                          <option key={helperName} value={helperName}>
+                            {helperName}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex flex-col gap-2 text-xs font-semibold uppercase tracking-wide text-neutral-600">
+                      From date
+                      <input
+                        type="date"
+                        value={filterFromDate}
+                        onChange={(event) => setFilterFromDate(event.target.value)}
+                        className="rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm font-medium normal-case text-neutral-800 outline-none transition focus:border-black"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-2 text-xs font-semibold uppercase tracking-wide text-neutral-600">
+                      To date
+                      <input
+                        type="date"
+                        value={filterToDate}
+                        onChange={(event) => setFilterToDate(event.target.value)}
+                        className="rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm font-medium normal-case text-neutral-800 outline-none transition focus:border-black"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-2 text-xs font-semibold uppercase tracking-wide text-neutral-600 sm:col-span-2">
+                      Payment status
+                      <select
+                        value={filterStatus}
+                        onChange={(event) => setFilterStatus(event.target.value as "all" | "pending" | "received" | "to_get")}
+                        className="rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm font-medium normal-case text-neutral-800 outline-none transition focus:border-black"
+                      >
+                        <option value="all">All status</option>
+                        <option value="pending">Pending</option>
+                        <option value="received">Received</option>
+                        <option value="to_get">To get</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={clearFilters}
+                      className="rounded-full border border-neutral-300 px-4 py-2 text-sm font-semibold text-neutral-800 hover:border-black"
+                    >
+                      Clear filters
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFilterModalOpen(false)}
+                      className="rounded-full bg-black px-4 py-2 text-sm font-semibold text-white"
+                    >
+                      Done
+                    </button>
+                  </div>
+                </div>
+              </Modal>
+            )}
 
             {createModalOpen && (
               <Modal title="Add work" onClose={() => setCreateModalOpen(false)}>
@@ -764,6 +1011,7 @@ export default function HomePage() {
         {activeTab === "incentives" && (
           <IncentiveTable
             companies={companies}
+            workTypes={workTypes}
             selectedCompanyId={selectedCompanyId}
             onSelectCompany={setSelectedCompanyId}
             onUpdateCompany={updateCompany}
@@ -875,14 +1123,14 @@ function DashboardCards({
     pendingPaymentCount: number;
     pendingPaymentAmount: number;
     helperTotalAmount: number;
-    completedWorkCount: number;
+    totalWorks: number;
   };
 }) {
   const cards = [
     { label: "No of pending payments", value: stats.pendingPaymentCount, accent: "text-amber-700" },
     { label: "Pending payment amount", value: `₹${stats.pendingPaymentAmount.toLocaleString()}`, accent: "text-rose-700" },
     { label: "Helper total amount", value: `₹${stats.helperTotalAmount.toLocaleString()}`, accent: "text-blue-700" },
-    { label: "Total completed works", value: stats.completedWorkCount, accent: "text-emerald-700" },
+    { label: "Total works", value: stats.totalWorks, accent: "text-emerald-700" },
   ];
 
   return (
@@ -901,6 +1149,7 @@ function DashboardCards({
 
 function IncentiveTable({
   companies,
+  workTypes,
   selectedCompanyId,
   onSelectCompany,
   onUpdateCompany,
@@ -909,6 +1158,7 @@ function IncentiveTable({
   onToast,
 }: {
   companies: IncentiveCompany[];
+  workTypes: WorkType[];
   selectedCompanyId: string;
   onSelectCompany: (id: string) => void;
   onUpdateCompany: (company: IncentiveCompany) => Promise<void>;
@@ -922,29 +1172,65 @@ function IncentiveTable({
   );
   const [newCompanyName, setNewCompanyName] = useState("");
   const [newLabel, setNewLabel] = useState("");
-  const [newValue, setNewValue] = useState(0);
-  const [editing, setEditing] = useState(false);
+  const [newOriginalValue, setNewOriginalValue] = useState(0);
+  const [newIncentiveValue, setNewIncentiveValue] = useState(0);
+  const [selectedRateType, setSelectedRateType] = useState("");
   const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({});
+  const [isEditingRates, setIsEditingRates] = useState(false);
+
+  const defaultRateType = useMemo(() => {
+    const found = workTypes.find((item) => item.name.trim().toLowerCase() === "installation");
+    return found?.name || workTypes[0]?.name || "Installation";
+  }, [workTypes]);
+
+  const effectiveRateType =
+    selectedRateType && workTypes.some((item) => item.name === selectedRateType)
+      ? selectedRateType
+      : defaultRateType;
+  const activeRates = useMemo(
+    () => resolveCompanyRatesForType(active, effectiveRateType),
+    [active, effectiveRateType],
+  );
+
+  const parseDigitsOnly = (value: string) => {
+    const digits = value.replace(/[^0-9]/g, "");
+    return digits ? Number(digits) : 0;
+  };
 
   const updateRate = (key: keyof IncentiveRates, field: "originalPrice" | "incentive", value: number) => {
+    const typeKey = getRateKey(effectiveRateType);
+    const nextRates = {
+      ...activeRates,
+      [key]: {
+        ...activeRates[key],
+        [field]: value,
+      },
+    };
+
     onUpdateCompany({
       ...active,
-      rates: { ...active.rates, [key]: { ...active.rates[key], [field]: value } },
+      rates: typeKey === getRateKey(defaultRateType) ? nextRates : active.rates,
+      typeRates: {
+        ...(active.typeRates || {}),
+        [typeKey]: nextRates,
+      },
     });
   };
 
   const addCustom = () => {
     if (!newLabel.trim()) return;
-    const incentive = Number(newValue) || 0;
-    onUpdateCompany({ ...active, customRates: [...active.customRates, { label: newLabel.trim(), incentive }] })
+    const originalPrice = Number(newOriginalValue) || 0;
+    const incentive = Number(newIncentiveValue) || 0;
+    onUpdateCompany({ ...active, customRates: [...active.customRates, { label: newLabel.trim(), originalPrice, incentive }] })
       .then(() => onToast("success", "Custom incentive added."))
       .catch((error) => onToast("error", error instanceof Error ? error.message : "Could not add custom incentive."));
     setNewLabel("");
-    setNewValue(0);
+    setNewOriginalValue(0);
+    setNewIncentiveValue(0);
   };
 
-  const updateCustomAmount = (index: number, value: number) => {
-    const next = active.customRates.map((item, idx) => (idx === index ? { ...item, incentive: value } : item));
+  const updateCustomAmount = (index: number, field: "originalPrice" | "incentive", value: number) => {
+    const next = active.customRates.map((item, idx) => (idx === index ? { ...item, [field]: value } : item));
     onUpdateCompany({ ...active, customRates: next });
   };
 
@@ -960,11 +1246,11 @@ function IncentiveTable({
   };
 
   const baseRows: Array<{ key: keyof IncentiveRates; label: string; value: IncentiveRates[keyof IncentiveRates] }> = [
-    { key: "insCharge", label: "Ins charge", value: active.rates.insCharge },
-    { key: "stand", label: "Stand", value: active.rates.stand },
-    { key: "whiteTape", label: "White tape", value: active.rates.whiteTape },
-    { key: "plugTop", label: "Plug top", value: active.rates.plugTop },
-    { key: "piping", label: "Piping", value: active.rates.piping },
+    { key: "insCharge", label: "Ins charge", value: activeRates.insCharge },
+    { key: "stand", label: "Stand", value: activeRates.stand },
+    { key: "whiteTape", label: "White tape", value: activeRates.whiteTape },
+    { key: "plugTop", label: "Plug top", value: activeRates.plugTop },
+    { key: "piping", label: "Piping", value: activeRates.piping },
   ];
 
   return (
@@ -972,7 +1258,7 @@ function IncentiveTable({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold">Incentive companies</h2>
-          <p className="text-sm text-neutral-600">Switch between companies to manage their rates and custom incentives.</p>
+          <p className="text-sm text-neutral-600">Switch companies and work types to manage type-specific rates and custom incentives.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <select
@@ -1009,6 +1295,17 @@ function IncentiveTable({
               Add
             </button>
           </div>
+          <select
+            value={effectiveRateType}
+            onChange={(event) => setSelectedRateType(event.target.value)}
+            className="rounded-full border border-neutral-200 bg-white px-3 py-2 text-sm font-semibold text-neutral-800"
+          >
+            {workTypes.map((type) => (
+              <option key={type.id} value={type.name}>
+                {type.name}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
 
@@ -1047,14 +1344,14 @@ function IncentiveTable({
             >
               Delete company
             </button>
+            <button
+              type="button"
+              onClick={() => setIsEditingRates((current) => !current)}
+              className="rounded-full border border-neutral-300 px-3 py-1 text-xs font-semibold text-neutral-800 hover:border-black hover:text-black"
+            >
+              {isEditingRates ? "Lock" : "Edit incentive"}
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() => setEditing((v) => !v)}
-            className="rounded-full bg-black px-4 py-2 text-xs font-semibold text-white shadow-md shadow-black/10"
-          >
-            {editing ? "Lock rates" : "Edit rates"}
-          </button>
         </div>
 
         <div className="overflow-hidden rounded-xl border border-neutral-200">
@@ -1071,27 +1368,31 @@ function IncentiveTable({
                 <tr key={row.key} className="border-t border-neutral-200">
                   <td className="px-4 py-3 font-medium text-neutral-800">{row.label}</td>
                   <td className="px-4 py-3 text-neutral-800">
-                    {editing ? (
+                    {isEditingRates ? (
                       <input
-                        type="number"
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
                         value={toNumberInputValue(row.value.originalPrice)}
-                        onChange={(event) => updateRate(row.key, "originalPrice", Number(event.target.value) || 0)}
+                        onChange={(event) => updateRate(row.key, "originalPrice", parseDigitsOnly(event.target.value))}
                         className="w-32 rounded-md border border-neutral-200 px-2 py-1 text-sm font-medium text-neutral-900 outline-none focus:border-black"
                       />
                     ) : (
-                      <span>₹{row.value.originalPrice.toLocaleString()}</span>
+                      row.value.originalPrice
                     )}
                   </td>
                   <td className="px-4 py-3 text-neutral-800">
-                    {editing ? (
+                    {isEditingRates ? (
                       <input
-                        type="number"
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
                         value={toNumberInputValue(row.value.incentive)}
-                        onChange={(event) => updateRate(row.key, "incentive", Number(event.target.value) || 0)}
+                        onChange={(event) => updateRate(row.key, "incentive", parseDigitsOnly(event.target.value))}
                         className="w-32 rounded-md border border-neutral-200 px-2 py-1 text-sm font-medium text-neutral-900 outline-none focus:border-black"
                       />
                     ) : (
-                      <span>₹{row.value.incentive.toLocaleString()}</span>
+                      row.value.incentive
                     )}
                   </td>
                 </tr>
@@ -1099,17 +1400,32 @@ function IncentiveTable({
               {active.customRates.map((row, idx) => (
                 <tr key={`${row.label}-${idx}`} className="border-t border-neutral-200">
                   <td className="px-4 py-3 font-medium text-neutral-800">{row.label}</td>
-                  <td className="px-4 py-3 text-neutral-500">—</td>
                   <td className="px-4 py-3 text-neutral-800">
-                    {editing ? (
+                    {isEditingRates ? (
                       <input
-                        type="number"
-                        value={toNumberInputValue(row.incentive)}
-                        onChange={(event) => updateCustomAmount(idx, Number(event.target.value) || 0)}
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        value={toNumberInputValue(row.originalPrice)}
+                        onChange={(event) => updateCustomAmount(idx, "originalPrice", parseDigitsOnly(event.target.value))}
                         className="w-32 rounded-md border border-neutral-200 px-2 py-1 text-sm font-medium text-neutral-900 outline-none focus:border-black"
                       />
                     ) : (
-                      <span>₹{row.incentive.toLocaleString()}</span>
+                      row.originalPrice
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-neutral-800">
+                    {isEditingRates ? (
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        value={toNumberInputValue(row.incentive)}
+                        onChange={(event) => updateCustomAmount(idx, "incentive", parseDigitsOnly(event.target.value))}
+                        className="w-32 rounded-md border border-neutral-200 px-2 py-1 text-sm font-medium text-neutral-900 outline-none focus:border-black"
+                      />
+                    ) : (
+                      row.incentive
                     )}
                   </td>
                 </tr>
@@ -1129,13 +1445,25 @@ function IncentiveTable({
             />
           </div>
           <div className="flex flex-col gap-2">
-            <label className="text-xs font-semibold uppercase tracking-wide text-neutral-600">Amount</label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-neutral-600">Original amount</label>
             <input
-              type="number"
-              value={toNumberInputValue(newValue)}
-              onChange={(event) => setNewValue(Number(event.target.value) || 0)}
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={toNumberInputValue(newOriginalValue)}
+              onChange={(event) => setNewOriginalValue(parseDigitsOnly(event.target.value))}
               className="rounded-lg border border-neutral-200 px-3 py-2 text-sm font-medium text-neutral-900 outline-none transition focus:border-black"
-              min={0}
+            />
+          </div>
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-semibold uppercase tracking-wide text-neutral-600">Incentive amount</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={toNumberInputValue(newIncentiveValue)}
+              onChange={(event) => setNewIncentiveValue(parseDigitsOnly(event.target.value))}
+              className="rounded-lg border border-neutral-200 px-3 py-2 text-sm font-medium text-neutral-900 outline-none transition focus:border-black"
             />
           </div>
           <button

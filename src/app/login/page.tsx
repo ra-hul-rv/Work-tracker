@@ -57,18 +57,29 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-sky-100 via-cyan-50 to-blue-200 px-6">
       <div className="w-full max-w-md rounded-2xl border border-neutral-200 bg-white/80 p-8 text-neutral-900 shadow-xl shadow-black/10">
         <div className="mb-2 w-fit rounded-xl border border-sky-200 bg-white px-3 py-2 shadow-sm">
-          <Image
-            src="/freezezone.png"
-            alt="FreezeZone"
-            width={280}
-            height={86}
-            className="h-14 w-auto object-contain"
-            priority
-            unoptimized
-          />
+          <div className="flex items-center gap-3">
+            <Image
+              src="/freezezone-logo.png"
+              alt="Freezezone logo"
+              width={56}
+              height={56}
+              className="h-10 w-10 object-contain"
+              priority
+              unoptimized
+            />
+            <Image
+              src="/freezezone-wordmark.png"
+              alt="Freezezone"
+              width={240}
+              height={54}
+              className="h-8 w-auto object-contain"
+              priority
+              unoptimized
+            />
+          </div>
         </div>
         <p className="text-xs uppercase tracking-[0.2em] text-neutral-500">Access</p>
-        <h1 className="mt-2 text-2xl font-semibold">Sign in to freezezone</h1>
+        <h1 className="mt-2 text-2xl font-semibold">Sign in to Freezezone</h1>
         {!isFirebaseConfigured && (
           <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
             Add Firebase environment variables to enable authentication.

@@ -13,12 +13,12 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "freezezone",
+  title: "Freezezone",
   description: "Track AC installation work, balances, and incentives",
   icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
-    apple: "/favicon.svg",
+    icon: "/freezezone-logo.png",
+    shortcut: "/freezezone-logo.png",
+    apple: "/freezezone-logo.png",
   },
 };
 
