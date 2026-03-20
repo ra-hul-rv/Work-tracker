@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { calculateJob, calculateTotalCollected, calculateTotalIncentive } from "../lib/calculations";
-import { CustomIncentive, IncentiveCompany, JobInput, WorkType } from "../lib/types";
+import { calculateTotalCollected, calculateTotalIncentive } from "../lib/calculations";
+import { CustomIncentive, Helper, IncentiveCompany, IncentiveRates, JobInput, JobStatus, WorkType } from "../lib/types";
 import { parseWorkDetails } from "../lib/parser";
 
 const EMPTY_COMPANY: IncentiveCompany = {
@@ -51,10 +51,29 @@ const syncCustomIncentives = (
   return next;
 };
 
+const cloneRates = (rates: IncentiveRates): IncentiveRates => ({
+  insCharge: { ...rates.insCharge },
+  stand: { ...rates.stand },
+  whiteTape: { ...rates.whiteTape },
+  plugTop: { ...rates.plugTop },
+  piping: { ...rates.piping },
+});
+
+const getDefaultTypeName = (workTypes: WorkType[]) => {
+  const found = workTypes.find((item) => item.name.trim().toLowerCase() === "installation");
+  return found?.name || workTypes[0]?.name || "Installation";
+};
+
+const normalizeStatus = (status: JobInput["status"]): JobStatus => {
+  if (status === "received" || status === "to_get") return status;
+  return "pending";
+};
+
 const makeEmptyJob = (company: IncentiveCompany, workTypes: WorkType[]): JobInput => ({
   date: new Date().toISOString().slice(0, 10),
-  type: workTypes[0]?.name || "Installation",
+  type: getDefaultTypeName(workTypes),
   status: "pending",
+  amountToGet: 0,
   customerName: "",
   location: "",
   contact: "",
@@ -63,6 +82,7 @@ const makeEmptyJob = (company: IncentiveCompany, workTypes: WorkType[]): JobInpu
   helperSalary: 0,
   companyId: company.id,
   companyName: company.name,
+  jobRates: cloneRates(company.rates),
   charges: {
     insCharge: company.rates.insCharge.originalPrice,
     stand: company.rates.stand.originalPrice,
@@ -76,14 +96,21 @@ const makeEmptyJob = (company: IncentiveCompany, workTypes: WorkType[]): JobInpu
 });
 
 const numberOrZero = (value: string) => {
+  if (value.trim() === "") return 0;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const toInputNumberValue = (value: number | undefined) => {
+  if (!value) return "";
+  return String(value);
 };
 
 type Props = {
   onSubmit: (job: JobInput) => Promise<void>;
   companies: IncentiveCompany[];
   workTypes: WorkType[];
+  helpers: Helper[];
   selectedCompanyId?: string;
   onSelectCompany?: (companyId: string) => void;
   initialJob?: JobInput;
@@ -96,6 +123,7 @@ export function JobForm({
   onSubmit,
   companies,
   workTypes,
+  helpers,
   selectedCompanyId,
   onSelectCompany,
   initialJob,
@@ -114,10 +142,12 @@ export function JobForm({
       const company = companies.find((c) => c.id === (initialJob.companyId || selectedCompanyId)) || activeCompany;
       return {
         ...initialJob,
-        status: initialJob.status === "received" ? "received" : "pending",
+        status: normalizeStatus(initialJob.status),
+        amountToGet: initialJob.amountToGet || 0,
         brand: initialJob.brand || "",
         companyId: company.id,
         companyName: company.name,
+        jobRates: cloneRates(initialJob.jobRates || company.rates),
         customIncentives: syncCustomIncentives(initialJob.customIncentives || [], company.customRates),
       };
     }
@@ -132,10 +162,12 @@ export function JobForm({
       const company = companies.find((c) => c.id === (initialJob.companyId || selectedCompanyId)) || activeCompany;
       setJob({
         ...initialJob,
-        status: initialJob.status === "received" ? "received" : "pending",
+        status: normalizeStatus(initialJob.status),
+        amountToGet: initialJob.amountToGet || 0,
         brand: initialJob.brand || "",
         companyId: company.id,
         companyName: company.name,
+        jobRates: cloneRates(initialJob.jobRates || company.rates),
         customIncentives: syncCustomIncentives(initialJob.customIncentives || [], company.customRates),
       });
       return;
@@ -143,7 +175,13 @@ export function JobForm({
     setJob((current) => {
       const company = companies.find((c) => c.id === (current.companyId || selectedCompanyId)) || activeCompany;
       const nextCustom = syncCustomIncentives(current.customIncentives || [], company.customRates);
-      return { ...current, companyId: company.id, companyName: company.name, customIncentives: nextCustom };
+      return {
+        ...current,
+        companyId: company.id,
+        companyName: company.name,
+        jobRates: current.jobRates || cloneRates(company.rates),
+        customIncentives: nextCustom,
+      };
     });
   }, [initialJob, companies, selectedCompanyId, activeCompany]);
 
@@ -158,7 +196,7 @@ export function JobForm({
     setJob((current) => {
       const exists = workTypes.some((item) => item.name === current.type);
       if (exists) return current;
-      return { ...current, type: workTypes[0].name };
+      return { ...current, type: getDefaultTypeName(workTypes) };
     });
   }, [initialJob, workTypes]);
 
@@ -166,8 +204,6 @@ export function JobForm({
     () => companies.find((c) => c.id === job.companyId) || activeCompany,
     [companies, job.companyId, activeCompany],
   );
-
-  const computed = useMemo(() => calculateJob(job, companyForJob.rates), [job, companyForJob.rates]);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -211,18 +247,55 @@ export function JobForm({
   };
 
   const updateField = (field: keyof JobInput, value: string) => {
-    if (field === "helperSalary") {
-      setJob((current) => ({ ...current, helperSalary: numberOrZero(value) }));
+    if (field === "helperSalary" || field === "amountToGet") {
+      setJob((current) => ({ ...current, [field]: numberOrZero(value) }));
       return;
     }
+
+    if (field === "status") {
+      const nextStatus = normalizeStatus(value as JobStatus);
+      setJob((current) => ({
+        ...current,
+        status: nextStatus,
+        amountToGet: nextStatus === "to_get" ? current.amountToGet || 0 : 0,
+      }));
+      return;
+    }
+
     setJob((current) => ({ ...current, [field]: value }));
+  };
+
+  const updateIncentive = (key: keyof IncentiveRates, value: string) => {
+    setJob((current) => {
+      const baseRates = current.jobRates || cloneRates(companyForJob.rates);
+      return {
+        ...current,
+        jobRates: {
+          ...baseRates,
+          [key]: {
+            ...baseRates[key],
+            incentive: numberOrZero(value),
+          },
+        },
+      };
+    });
   };
 
   const totalCharges = useMemo(() => calculateTotalCollected(job.charges), [job.charges]);
   const totalIncentive = useMemo(
-    () => calculateTotalIncentive(job.charges, companyForJob.rates, job.customIncentives || []),
-    [job.charges, companyForJob.rates, job.customIncentives],
+    () => calculateTotalIncentive(job.charges, job.jobRates || companyForJob.rates, job.customIncentives || []),
+    [job.charges, job.jobRates, companyForJob.rates, job.customIncentives],
   );
+
+  const helperOptions = useMemo(() => {
+    const names = helpers
+      .map((item) => item.name.trim())
+      .filter((value) => value.length > 0);
+    if (job.helper && !names.includes(job.helper)) {
+      return [job.helper, ...names];
+    }
+    return names;
+  }, [helpers, job.helper]);
 
   const typeOptions = useMemo(() => {
     const names = (workTypes.length > 0 ? workTypes : DEFAULT_WORK_TYPES).map((item) => item.name);
@@ -346,6 +419,7 @@ export function JobForm({
                       ...current,
                       companyId: company.id,
                       companyName: company.name,
+                      jobRates: cloneRates(company.rates),
                       charges: {
                         ...current.charges,
                         insCharge: company.rates.insCharge.originalPrice,
@@ -379,7 +453,9 @@ export function JobForm({
                 </thead>
                 <tbody>
                   {BASE_RATE_ROWS.map((row) => {
-                    const incentive = row.incentiveKey ? companyForJob.rates[row.incentiveKey].incentive : 0;
+                    const incentive = row.incentiveKey
+                      ? (job.jobRates?.[row.incentiveKey]?.incentive ?? companyForJob.rates[row.incentiveKey].incentive)
+                      : 0;
                     const chargeValue = job.charges[row.key];
                     return (
                       <tr key={row.key} className="border-t border-neutral-200">
@@ -388,15 +464,25 @@ export function JobForm({
                           <input
                             type="number"
                             inputMode="decimal"
-                            value={chargeValue}
+                            value={toInputNumberValue(chargeValue)}
                             onChange={(event) => updateCharge(row.key, event.target.value)}
                             className="w-36 rounded-lg border border-neutral-200 px-3 py-2 text-sm font-medium text-neutral-900 outline-none transition focus:border-black"
                             min={0}
-                            placeholder="0"
                           />
                         </td>
                         <td className="px-4 py-3 font-semibold text-neutral-800">
-                          {row.incentiveKey ? `₹${incentive.toLocaleString()}` : "—"}
+                          {row.incentiveKey ? (
+                            <input
+                              type="number"
+                              inputMode="decimal"
+                              value={toInputNumberValue(incentive)}
+                              onChange={(event) => updateIncentive(row.incentiveKey!, event.target.value)}
+                              className="w-36 rounded-lg border border-neutral-200 px-3 py-2 text-sm font-medium text-neutral-900 outline-none transition focus:border-black"
+                              min={0}
+                            />
+                          ) : (
+                            "—"
+                          )}
                         </td>
                       </tr>
                     );
@@ -408,14 +494,30 @@ export function JobForm({
         )}
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-4">
         <div className="flex flex-col gap-2">
           <label className="text-xs font-semibold uppercase tracking-wide text-neutral-600">Helper name</label>
-          <input
+          <select
             value={job.helper}
             onChange={(event) => updateField("helper", event.target.value)}
             className="rounded-lg border border-neutral-200 px-3 py-2 text-sm font-medium text-neutral-900 outline-none transition focus:border-black"
-            placeholder="Helper"
+          >
+            <option value="">Select helper</option>
+            {helperOptions.map((helperName) => (
+              <option key={helperName} value={helperName}>
+                {helperName}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex flex-col gap-2">
+          <label className="text-xs font-semibold uppercase tracking-wide text-neutral-600">Payment amount</label>
+          <input
+            type="number"
+            value={toInputNumberValue(job.helperSalary)}
+            onChange={(event) => updateField("helperSalary", event.target.value)}
+            className="rounded-lg border border-neutral-200 px-3 py-2 text-sm font-medium text-neutral-900 outline-none transition focus:border-black"
+            min={0}
           />
         </div>
         <div className="flex flex-col gap-2">
@@ -427,19 +529,23 @@ export function JobForm({
           >
             <option value="pending">Pending</option>
             <option value="received">Received</option>
+            <option value="to_get">To get</option>
           </select>
         </div>
-        <div className="flex flex-col gap-2">
-          <label className="text-xs font-semibold uppercase tracking-wide text-neutral-600">Helper salary</label>
-          <input
-            type="number"
-            value={job.helperSalary}
-            onChange={(event) => updateField("helperSalary", event.target.value)}
-            className="rounded-lg border border-neutral-200 px-3 py-2 text-sm font-medium text-neutral-900 outline-none transition focus:border-black"
-            placeholder="0"
-            min={0}
-          />
-        </div>
+        {(job.status || "pending") === "to_get" && (
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-semibold uppercase tracking-wide text-neutral-600">Amount to get</label>
+            <input
+              type="number"
+              value={toInputNumberValue(job.amountToGet || 0)}
+              onChange={(event) => {
+                setJob((current) => ({ ...current, amountToGet: numberOrZero(event.target.value) }));
+              }}
+              className="rounded-lg border border-neutral-200 px-3 py-2 text-sm font-medium text-neutral-900 outline-none transition focus:border-black"
+              min={0}
+            />
+          </div>
+        )}
       </div>
 
       {companyForJob.customRates.length > 0 && (
@@ -475,10 +581,8 @@ export function JobForm({
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-3 rounded-xl bg-neutral-50 px-4 py-3 text-sm font-semibold text-neutral-800 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 rounded-xl bg-neutral-50 px-4 py-3 text-sm font-semibold text-neutral-800 sm:grid-cols-2">
         <span className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-neutral-200 bg-white px-3 py-2">Collected from customer <strong className="text-lg font-bold">₹{totalCharges.toLocaleString()}</strong></span>
-        <span className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-neutral-200 bg-white px-3 py-2">Balance to be paid <strong className="text-lg font-bold">₹{computed.balanceToBePaid.toLocaleString()}</strong></span>
-        <span className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-neutral-200 bg-white px-3 py-2">Total balance <strong className="text-lg font-bold">₹{computed.totalBalance.toLocaleString()}</strong></span>
         <span className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-neutral-200 bg-white px-3 py-2">Total incentive <strong className="text-lg font-bold">₹{totalIncentive.toLocaleString()}</strong></span>
       </div>
 

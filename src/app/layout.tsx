@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "CoolTrack",
+  title: "freezezone",
   description: "Track AC installation work, balances, and incentives",
   icons: {
     icon: "/favicon.svg",

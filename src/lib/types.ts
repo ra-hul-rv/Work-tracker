@@ -29,6 +29,13 @@ export type WorkType = {
   name: string;
 };
 
+export type Helper = {
+  id: string;
+  name: string;
+};
+
+export type JobStatus = "pending" | "received" | "to_get";
+
 export type Charges = {
   insCharge: number;
   stand: number;
@@ -49,9 +56,11 @@ export type JobInput = {
   acDetails?: string;
   helper: string;
   helperSalary: number;
-  status?: "pending" | "received";
+  status?: JobStatus;
+  amountToGet?: number;
   companyId?: string;
   companyName?: string;
+  jobRates?: IncentiveRates;
   charges: Charges;
   customIncentives?: CustomIncentive[];
 };

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { addDoc, collection, deleteDoc, doc, onSnapshot, query, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
 import { onAuthStateChanged, type User } from "firebase/auth";
@@ -8,7 +9,7 @@ import { JobForm } from "../components/JobForm";
 import { JobTable } from "../components/JobTable";
 import { calculateJob } from "../lib/calculations";
 import { db, auth, isFirebaseConfigured } from "../lib/firebase";
-import { INCENTIVE_RATES, CustomIncentive, IncentiveCompany, IncentiveRates, JobInput, JobRecord, WorkType } from "../lib/types";
+import { INCENTIVE_RATES, CustomIncentive, Helper, IncentiveCompany, IncentiveRates, JobInput, JobRecord, WorkType } from "../lib/types";
 
 const DEFAULT_COMPANY: IncentiveCompany = {
   id: "default",
@@ -29,11 +30,25 @@ const toNumber = (value: unknown): number => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const toNumberInputValue = (value: number) => (value === 0 ? "" : String(value));
+
 const asRecord = (value: unknown): Record<string, unknown> => {
   if (value && typeof value === "object") {
     return value as Record<string, unknown>;
   }
   return {};
+};
+
+const formatFirestoreError = (error: unknown, fallback: string) => {
+  if (!error || typeof error !== "object") return fallback;
+  const maybeCode = "code" in error ? String((error as { code?: unknown }).code || "") : "";
+  const maybeMessage = "message" in error ? String((error as { message?: unknown }).message || "") : "";
+
+  if (maybeCode.includes("permission-denied") || maybeMessage.toLowerCase().includes("insufficient permissions")) {
+    return "Firestore permission denied. Update Firestore Rules to allow authenticated access for jobs, incentiveCompanies, workTypes, and helpers.";
+  }
+
+  return maybeMessage || fallback;
 };
 
 const normalizeRates = (raw: Record<string, unknown> | undefined): IncentiveRates => {
@@ -64,10 +79,11 @@ export default function HomePage() {
   const [loading, setLoading] = useState(Boolean(db));
   const [error, setError] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
-  const [activeTab, setActiveTab] = useState<"work" | "incentives" | "types">("work");
+  const [activeTab, setActiveTab] = useState<"work" | "incentives" | "types" | "labours">("work");
   const [companies, setCompanies] = useState<IncentiveCompany[]>([DEFAULT_COMPANY]);
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>(DEFAULT_COMPANY.id);
   const [workTypes, setWorkTypes] = useState<WorkType[]>(DEFAULT_WORK_TYPES);
+  const [helpers, setHelpers] = useState<Helper[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editJob, setEditJob] = useState<JobRecord | null>(null);
@@ -134,7 +150,7 @@ export default function HomePage() {
         setCompanies(next);
         setSelectedCompanyId((current) => (next.some((company) => company.id === current) ? current : next[0]?.id || DEFAULT_COMPANY.id));
       },
-      (err) => setError(err.message || "Could not load incentive companies."),
+      (err) => setError(formatFirestoreError(err, "Could not load incentive companies.")),
     );
 
     return () => unsubscribe();
@@ -180,7 +196,40 @@ export default function HomePage() {
 
         setWorkTypes(next.length > 0 ? next : DEFAULT_WORK_TYPES);
       },
-      (err) => setError(err.message || "Could not load work types."),
+      (err) => setError(formatFirestoreError(err, "Could not load work types.")),
+    );
+
+    return () => unsubscribe();
+  }, [user, requiresAuth]);
+
+  useEffect(() => {
+    const firestore = db;
+    if (!firestore) {
+      return;
+    }
+
+    if (requiresAuth && !user) {
+      return;
+    }
+
+    const q = query(collection(firestore, "helpers"));
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const next = snapshot.docs
+          .map((document) => {
+            const data = asRecord(document.data());
+            return {
+              id: document.id,
+              name: typeof data.name === "string" ? data.name.trim() : "",
+            } as Helper;
+          })
+          .filter((item) => item.name.length > 0)
+          .sort((a, b) => a.name.localeCompare(b.name));
+
+        setHelpers(next);
+      },
+      (err) => setError(formatFirestoreError(err, "Could not load labours.")),
     );
 
     return () => unsubscribe();
@@ -225,19 +274,29 @@ export default function HomePage() {
             : [];
 
           const status = data.status;
+          const jobRatesRaw = asRecord(data.jobRates);
+          const hasJobRates = Object.keys(jobRatesRaw).length > 0;
+          const normalizedStatus =
+            status === "to_get"
+              ? "to_get"
+              : status === "completed" || status === "received"
+                ? "received"
+                : "pending";
 
           return {
-            ...(data as Omit<JobRecord, "id" | "charges" | "customIncentives" | "status" | "brand">),
+            ...(data as Omit<JobRecord, "id" | "charges" | "customIncentives" | "status" | "brand" | "amountToGet" | "jobRates">),
             id: document.id,
             brand: typeof data.brand === "string" ? data.brand : typeof data.acDetails === "string" ? data.acDetails : "",
             charges,
             customIncentives,
             helperSalary: toNumber(data.helperSalary),
+            amountToGet: toNumber(data.amountToGet),
+            jobRates: hasJobRates ? normalizeRates(jobRatesRaw) : undefined,
             totalCollected: toNumber(data.totalCollected),
             totalBalance: toNumber(data.totalBalance),
             balanceToBePaid: toNumber(data.balanceToBePaid),
             totalIncentive: toNumber(data.totalIncentive),
-            status: status === "completed" || status === "received" ? "received" : "pending",
+            status: normalizedStatus,
             companyId: typeof data.companyId === "string" ? data.companyId : DEFAULT_COMPANY.id,
             companyName: typeof data.companyName === "string" ? data.companyName : DEFAULT_COMPANY.name,
             createdAt: typeof data.createdAt === "number" ? data.createdAt : Date.now(),
@@ -249,7 +308,7 @@ export default function HomePage() {
         setLoading(false);
       },
       (err) => {
-        setError(err.message || "Missing or insufficient permissions. Check Firestore rules.");
+        setError(formatFirestoreError(err, "Missing or insufficient permissions. Check Firestore rules."));
         setLoading(false);
       },
     );
@@ -283,7 +342,7 @@ export default function HomePage() {
     if (auth && !user) throw new Error("Login to add jobs.");
 
     const company = companies.find((c) => c.id === job.companyId) || activeCompany || DEFAULT_COMPANY;
-    const record = calculateJob({ ...job, companyId: company.id, companyName: company.name }, company.rates);
+    const record = calculateJob({ ...job, companyId: company.id, companyName: company.name }, job.jobRates || company.rates);
     await addDoc(collection(db!, "jobs"), {
       ...record,
       createdAt: Date.now(),
@@ -296,7 +355,7 @@ export default function HomePage() {
     if (auth && !user) throw new Error("Login to edit jobs.");
 
     const company = companies.find((c) => c.id === job.companyId) || activeCompany || DEFAULT_COMPANY;
-    const record = calculateJob({ ...job, companyId: company.id, companyName: company.name }, company.rates);
+    const record = calculateJob({ ...job, companyId: company.id, companyName: company.name }, job.jobRates || company.rates);
     await updateDoc(doc(db!, "jobs", id), {
       ...record,
       updatedAt: Date.now(),
@@ -407,15 +466,39 @@ export default function HomePage() {
     await deleteDoc(doc(db, "workTypes", id));
   };
 
+  const addHelper = async (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const id = `helper-${Date.now()}`;
+    const nextHelper: Helper = { id, name: trimmed };
+    setHelpers((prev) => [...prev, nextHelper]);
+
+    if (!db) return;
+    if (auth && !user) throw new Error("Login to add labours.");
+    await setDoc(doc(db, "helpers", id), {
+      ...nextHelper,
+      createdAt: Date.now(),
+      createdAtServer: serverTimestamp(),
+    });
+  };
+
+  const deleteHelper = async (id: string) => {
+    setHelpers((prev) => prev.filter((item) => item.id !== id));
+
+    if (!db) return;
+    if (auth && !user) throw new Error("Login to delete labours.");
+    await deleteDoc(doc(db, "helpers", id));
+  };
+
   const stats = useMemo(() => {
     const pending = jobs.filter((job) => job.status !== "received");
     const completed = jobs.filter((job) => job.status === "received");
     const pendingPaymentAmount = pending.reduce((sum, job) => sum + (job.balanceToBePaid || 0), 0);
-    const completedWorkAmount = completed.reduce((sum, job) => sum + (job.totalCollected || 0), 0);
+    const helperTotalAmount = jobs.reduce((sum, job) => sum + (job.helperSalary || 0), 0);
     return {
       pendingPaymentCount: pending.length,
       pendingPaymentAmount,
-      completedWorkAmount,
+      helperTotalAmount,
       completedWorkCount: completed.length,
     };
   }, [jobs]);
@@ -433,9 +516,19 @@ export default function HomePage() {
   }, [jobs, searchQuery]);
 
   const header = (
-    <header className="flex flex-col gap-3 rounded-2xl bg-black px-8 py-6 text-white shadow-xl shadow-black/20 md:flex-row md:items-center md:justify-between">
-      <div>
-        <h1 className="break-words text-xl font-semibold leading-tight sm:text-2xl">CoolTrack</h1>
+    <header className="flex flex-col gap-3 rounded-2xl bg-gradient-to-r from-blue-950 via-blue-900 to-cyan-800 px-8 py-6 text-white shadow-xl shadow-blue-950/30 md:flex-row md:items-center md:justify-between">
+      <div className="flex items-center gap-3">
+        <div className="rounded-xl border border-white/60 bg-white/95 px-3 py-2 shadow-md shadow-blue-950/20">
+          <Image
+            src="/freezezone.png"
+            alt="FreezeZone"
+            width={280}
+            height={86}
+            priority
+            unoptimized
+            className="h-14 w-auto object-contain"
+          />
+        </div>
       </div>
       <div className="flex flex-col items-start gap-2 text-sm font-semibold text-white">
         <span className="rounded-full bg-white/10 px-4 py-2">{user?.email ?? "Guest"}</span>
@@ -454,7 +547,7 @@ export default function HomePage() {
 
   if (requiresAuth && !user) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-neutral-50 via-white to-slate-100 px-6 py-10 text-neutral-900">
+      <div className="min-h-screen bg-gradient-to-br from-sky-100 via-cyan-50 to-blue-200 px-6 py-10 text-neutral-900">
         <main className="mx-auto flex w-full max-w-6xl flex-col gap-6">
           {header}
           <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -481,14 +574,25 @@ export default function HomePage() {
               onToast={showToast}
             />
           )}
+          {activeTab === "labours" && (
+            <LabourTable
+              helpers={helpers}
+              onAddHelper={addHelper}
+              onDeleteHelper={deleteHelper}
+              onToast={showToast}
+            />
+          )}
         </main>
+        <footer className="mx-auto mt-6 w-full max-w-6xl text-center text-xs font-medium text-neutral-600">
+          Created by Rahul RV. All rights reserved.
+        </footer>
         <ToastMessage toast={toast} onClose={() => setToast(null)} />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-neutral-50 via-white to-slate-100 px-6 py-10 text-neutral-900">
+    <div className="min-h-screen bg-gradient-to-br from-sky-100 via-cyan-50 to-blue-200 px-6 py-10 text-neutral-900">
       <main className="mx-auto flex w-full max-w-6xl flex-col gap-6">
         {header}
 
@@ -606,6 +710,7 @@ export default function HomePage() {
                   }}
                   companies={companies}
                   workTypes={workTypes}
+                  helpers={helpers}
                   selectedCompanyId={selectedCompanyId}
                   onSelectCompany={setSelectedCompanyId}
                   submitLabel="Add to table"
@@ -629,6 +734,7 @@ export default function HomePage() {
                   }}
                   companies={companies}
                   workTypes={workTypes}
+                  helpers={helpers}
                   selectedCompanyId={editJob.companyId || selectedCompanyId}
                   onSelectCompany={setSelectedCompanyId}
                   submitLabel="Save changes"
@@ -676,7 +782,19 @@ export default function HomePage() {
             onToast={showToast}
           />
         )}
+
+        {activeTab === "labours" && (
+          <LabourTable
+            helpers={helpers}
+            onAddHelper={addHelper}
+            onDeleteHelper={deleteHelper}
+            onToast={showToast}
+          />
+        )}
       </main>
+      <footer className="mx-auto mt-6 w-full max-w-6xl text-center text-xs font-medium text-neutral-600">
+        Created by Rahul RV. All rights reserved.
+      </footer>
       <ToastMessage toast={toast} onClose={() => setToast(null)} />
     </div>
   );
@@ -717,8 +835,8 @@ function Tabs({
   active,
   onChange,
 }: {
-  active: "work" | "incentives" | "types";
-  onChange: (tab: "work" | "incentives" | "types") => void;
+  active: "work" | "incentives" | "types" | "labours";
+  onChange: (tab: "work" | "incentives" | "types" | "labours") => void;
 }) {
   return (
     <div className="flex flex-wrap gap-2 rounded-2xl bg-neutral-100 p-1 text-sm font-semibold text-neutral-700 sm:rounded-full">
@@ -740,6 +858,12 @@ function Tabs({
       >
         Work types
       </button>
+      <button
+        className={`rounded-full px-4 py-2 transition ${active === "labours" ? "bg-white shadow" : "hover:bg-white/70"}`}
+        onClick={() => onChange("labours")}
+      >
+        Labours
+      </button>
     </div>
   );
 }
@@ -750,15 +874,15 @@ function DashboardCards({
   stats: {
     pendingPaymentCount: number;
     pendingPaymentAmount: number;
-    completedWorkAmount: number;
+    helperTotalAmount: number;
     completedWorkCount: number;
   };
 }) {
   const cards = [
-    { label: "Pending payment no.", value: stats.pendingPaymentCount, accent: "text-amber-700" },
+    { label: "No of pending payments", value: stats.pendingPaymentCount, accent: "text-amber-700" },
     { label: "Pending payment amount", value: `₹${stats.pendingPaymentAmount.toLocaleString()}`, accent: "text-rose-700" },
-    { label: "Total completed work", value: `₹${stats.completedWorkAmount.toLocaleString()}`, accent: "text-blue-700" },
-    { label: "Total no. of work completed", value: stats.completedWorkCount, accent: "text-emerald-700" },
+    { label: "Helper total amount", value: `₹${stats.helperTotalAmount.toLocaleString()}`, accent: "text-blue-700" },
+    { label: "Total completed works", value: stats.completedWorkCount, accent: "text-emerald-700" },
   ];
 
   return (
@@ -950,7 +1074,7 @@ function IncentiveTable({
                     {editing ? (
                       <input
                         type="number"
-                        value={row.value.originalPrice}
+                        value={toNumberInputValue(row.value.originalPrice)}
                         onChange={(event) => updateRate(row.key, "originalPrice", Number(event.target.value) || 0)}
                         className="w-32 rounded-md border border-neutral-200 px-2 py-1 text-sm font-medium text-neutral-900 outline-none focus:border-black"
                       />
@@ -962,7 +1086,7 @@ function IncentiveTable({
                     {editing ? (
                       <input
                         type="number"
-                        value={row.value.incentive}
+                        value={toNumberInputValue(row.value.incentive)}
                         onChange={(event) => updateRate(row.key, "incentive", Number(event.target.value) || 0)}
                         className="w-32 rounded-md border border-neutral-200 px-2 py-1 text-sm font-medium text-neutral-900 outline-none focus:border-black"
                       />
@@ -980,7 +1104,7 @@ function IncentiveTable({
                     {editing ? (
                       <input
                         type="number"
-                        value={row.incentive}
+                        value={toNumberInputValue(row.incentive)}
                         onChange={(event) => updateCustomAmount(idx, Number(event.target.value) || 0)}
                         className="w-32 rounded-md border border-neutral-200 px-2 py-1 text-sm font-medium text-neutral-900 outline-none focus:border-black"
                       />
@@ -1008,10 +1132,9 @@ function IncentiveTable({
             <label className="text-xs font-semibold uppercase tracking-wide text-neutral-600">Amount</label>
             <input
               type="number"
-              value={newValue}
+              value={toNumberInputValue(newValue)}
               onChange={(event) => setNewValue(Number(event.target.value) || 0)}
               className="rounded-lg border border-neutral-200 px-3 py-2 text-sm font-medium text-neutral-900 outline-none transition focus:border-black"
-              placeholder="0"
               min={0}
             />
           </div>
@@ -1162,6 +1285,99 @@ function TypeTable({
                     </tr>
                   );
                 })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function LabourTable({
+  helpers,
+  onAddHelper,
+  onDeleteHelper,
+  onToast,
+}: {
+  helpers: Helper[];
+  onAddHelper: (name: string) => Promise<void>;
+  onDeleteHelper: (id: string) => Promise<void>;
+  onToast: (kind: "success" | "error", message: string) => void;
+}) {
+  const [newHelper, setNewHelper] = useState("");
+
+  return (
+    <section className="flex flex-col gap-4">
+      <div>
+        <h2 className="text-lg font-semibold">Labours</h2>
+        <p className="text-sm text-neutral-600">Add or remove labours used in the helper dropdown.</p>
+      </div>
+
+      <div className="rounded-2xl border border-neutral-200 bg-white/80 p-4 shadow-lg shadow-black/5">
+        <div className="mb-4 flex flex-wrap items-end gap-3 rounded-xl border border-dashed border-neutral-300 bg-white/80 p-3">
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-semibold uppercase tracking-wide text-neutral-600">New labour</label>
+            <input
+              value={newHelper}
+              onChange={(event) => setNewHelper(event.target.value)}
+              placeholder="e.g. Arun"
+              className="rounded-lg border border-neutral-200 px-3 py-2 text-sm font-medium text-neutral-900 outline-none transition focus:border-black"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                await onAddHelper(newHelper);
+                setNewHelper("");
+                onToast("success", "Labour added.");
+              } catch (error) {
+                onToast("error", error instanceof Error ? error.message : "Could not add labour.");
+              }
+            }}
+            className="rounded-full bg-black px-4 py-2 text-sm font-semibold text-white shadow-md shadow-black/10"
+          >
+            Add labour
+          </button>
+        </div>
+
+        {helpers.length === 0 ? (
+          <div className="rounded-xl border border-neutral-200 bg-white px-4 py-8 text-center">
+            <p className="text-sm font-semibold text-neutral-800">No labours yet</p>
+            <p className="mt-1 text-sm text-neutral-600">Add a labour above to include it in helper dropdown.</p>
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-xl border border-neutral-200">
+            <table className="w-full text-sm">
+              <thead className="bg-neutral-50 text-left text-xs font-semibold uppercase tracking-wide text-neutral-600">
+                <tr>
+                  <th className="px-4 py-3">Labour name</th>
+                  <th className="px-4 py-3">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {helpers.map((helper) => (
+                  <tr key={helper.id} className="border-t border-neutral-200">
+                    <td className="px-4 py-3 font-medium text-neutral-800">{helper.name}</td>
+                    <td className="px-4 py-3">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await onDeleteHelper(helper.id);
+                            onToast("success", "Labour removed.");
+                          } catch (error) {
+                            onToast("error", error instanceof Error ? error.message : "Could not remove labour.");
+                          }
+                        }}
+                        className="rounded-full border border-red-200 px-3 py-1 text-xs font-semibold text-red-700 hover:border-red-500 hover:text-red-800"
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
