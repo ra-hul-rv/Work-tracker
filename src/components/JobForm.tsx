@@ -283,8 +283,8 @@ export function JobForm({
 
   const totalCharges = useMemo(() => calculateTotalCollected(job.charges), [job.charges]);
   const totalIncentive = useMemo(
-    () => calculateTotalIncentive(job.jobRates || companyForJob.rates, job.customIncentives || []),
-    [job.jobRates, companyForJob.rates, job.customIncentives],
+    () => calculateTotalIncentive(job.charges, job.jobRates || companyForJob.rates, job.customIncentives || []),
+    [job.charges, job.jobRates, companyForJob.rates, job.customIncentives],
   );
 
   const helperOptions = useMemo(() => {
@@ -457,6 +457,9 @@ export function JobForm({
                       ? (job.jobRates?.[row.incentiveKey]?.incentive ?? companyForJob.rates[row.incentiveKey].incentive)
                       : 0;
                     const chargeValue = job.charges[row.key];
+                    const showIncentiveInput = row.incentiveKey
+                      ? row.incentiveKey === "insCharge" || numberOrZero(String(chargeValue)) > 0
+                      : false;
                     return (
                       <tr key={row.key} className="border-t border-neutral-200">
                         <td className="px-4 py-3 font-medium text-neutral-800">{row.label}</td>
@@ -471,7 +474,7 @@ export function JobForm({
                           />
                         </td>
                         <td className="px-4 py-3 font-semibold text-neutral-800">
-                          {row.incentiveKey ? (
+                          {row.incentiveKey && showIncentiveInput ? (
                             <input
                               type="number"
                               inputMode="decimal"
