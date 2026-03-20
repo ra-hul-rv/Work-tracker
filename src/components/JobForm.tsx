@@ -283,8 +283,8 @@ export function JobForm({
 
   const totalCharges = useMemo(() => calculateTotalCollected(job.charges), [job.charges]);
   const totalIncentive = useMemo(
-    () => calculateTotalIncentive(job.charges, job.jobRates || companyForJob.rates, job.customIncentives || []),
-    [job.charges, job.jobRates, companyForJob.rates, job.customIncentives],
+    () => calculateTotalIncentive(job.jobRates || companyForJob.rates, job.customIncentives || []),
+    [job.jobRates, companyForJob.rates, job.customIncentives],
   );
 
   const helperOptions = useMemo(() => {
