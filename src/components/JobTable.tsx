@@ -1,13 +1,14 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import { JobRecord } from "../lib/types";
+import { JobRecord, JobStatus } from "../lib/types";
 
 type Props = {
   jobs: JobRecord[];
   loading?: boolean;
   onEdit: (job: JobRecord) => void;
   onDelete: (job: JobRecord) => void;
+  onStatusChange: (job: JobRecord, status: JobStatus) => Promise<void>;
 };
 
 type SortKey =
@@ -83,12 +84,13 @@ const formatDate = (raw: string) => {
   }).format(parsed);
 };
 
-export function JobTable({ jobs, loading = false, onEdit, onDelete }: Props) {
+export function JobTable({ jobs, loading = false, onEdit, onDelete, onStatusChange }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const dragStartXRef = useRef(0);
   const dragStartScrollLeftRef = useRef(0);
   const [isDragging, setIsDragging] = useState(false);
   const [sortConfig, setSortConfig] = useState<SortConfig | null>(null);
+  const [updatingStatusId, setUpdatingStatusId] = useState<string | null>(null);
 
   const sortedJobs = useMemo(() => {
     const indexed = jobs.map((job, index) => ({ job, index }));
@@ -297,17 +299,33 @@ export function JobTable({ jobs, loading = false, onEdit, onDelete }: Props) {
               </td>
               <td className="px-3 py-3 text-neutral-800">
                 <div className="flex flex-col gap-1">
-                  <span
-                    className={`w-fit rounded-full px-3 py-1 text-xs font-semibold ${
+                  <select
+                    value={job.status || "pending"}
+                    onChange={async (event) => {
+                      if (!job.id) return;
+                      const nextStatus = event.target.value as JobStatus;
+                      if (nextStatus === (job.status || "pending")) return;
+                      setUpdatingStatusId(job.id);
+                      try {
+                        await onStatusChange(job, nextStatus);
+                      } finally {
+                        setUpdatingStatusId((current) => (current === job.id ? null : current));
+                      }
+                    }}
+                    disabled={!job.id || updatingStatusId === job.id}
+                    className={`w-fit rounded-full border-0 px-3 py-1 text-xs font-semibold outline-none transition disabled:cursor-not-allowed disabled:opacity-60 ${
                       job.status === "received"
                         ? "bg-green-100 text-green-700"
                         : job.status === "to_get"
                           ? "bg-red-100 text-red-700"
                           : "bg-amber-100 text-amber-700"
                     }`}
+                    aria-label="Payment status"
                   >
-                    {job.status === "received" ? "Received" : job.status === "to_get" ? "To get" : "Pending"}
-                  </span>
+                    <option value="pending">Pending</option>
+                    <option value="received">Received</option>
+                    <option value="to_get">To get</option>
+                  </select>
                   {job.status === "to_get" && (job.amountToGet || 0) > 0 && (
                     <span className="text-xs font-semibold text-red-700">₹{(job.amountToGet || 0).toLocaleString()}</span>
                   )}

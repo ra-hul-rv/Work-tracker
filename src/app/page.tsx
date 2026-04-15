@@ -9,7 +9,7 @@ import { JobForm } from "../components/JobForm";
 import { JobTable } from "../components/JobTable";
 import { calculateJob } from "../lib/calculations";
 import { db, auth, isFirebaseConfigured } from "../lib/firebase";
-import { INCENTIVE_RATES, CustomIncentive, Helper, IncentiveCompany, IncentiveRates, JobInput, JobRecord, WorkType } from "../lib/types";
+import { INCENTIVE_RATES, CustomIncentive, Helper, IncentiveCompany, IncentiveRates, JobInput, JobRecord, JobStatus, WorkType } from "../lib/types";
 
 const DEFAULT_COMPANY: IncentiveCompany = {
   id: "default",
@@ -432,6 +432,19 @@ export default function HomePage() {
     await deleteDoc(doc(db!, "jobs", jobId));
   };
 
+  const updateJobStatus = async (job: JobRecord, status: JobStatus) => {
+    if (!job.id) return;
+    requireDb();
+    if (auth && !user) throw new Error("Login to edit jobs.");
+
+    await updateDoc(doc(db!, "jobs", job.id), {
+      status,
+      amountToGet: status === "to_get" ? job.amountToGet || 0 : 0,
+      updatedAt: Date.now(),
+      updatedAtServer: serverTimestamp(),
+    });
+  };
+
   const updateCompany = async (next: IncentiveCompany) => {
     setCompanies((prev) => prev.map((c) => (c.id === next.id ? next : c)));
     if (!db) return;
@@ -593,13 +606,18 @@ export default function HomePage() {
 
   const stats = useMemo(() => {
     const pending = filteredJobs.filter((job) => job.status !== "received");
-    const pendingPaymentAmount = pending.reduce((sum, job) => sum + (job.balanceToBePaid || 0), 0);
-    const helperTotalAmount = filteredJobs.reduce((sum, job) => sum + (job.helperSalary || 0), 0);
+    const pendingPaymentAmount = pending.reduce((sum, job) => sum + (job.totalIncentive || 0), 0);
+    const helperTotalAmount = filteredJobs.filter((job) => (job.status || "pending") === "pending").reduce((sum, job) => sum + (job.helperSalary || 0), 0);
+    const pendingTotalCollected = filteredJobs.filter((job) => (job.status || "pending") === "pending").reduce((sum, job) => sum + (job.totalCollected || 0), 0);
+    const pendingIncentiveBalance = pendingPaymentAmount - pendingTotalCollected;
+    const pendingNetBalance = pendingPaymentAmount - helperTotalAmount;
     return {
       pendingPaymentCount: pending.length,
       pendingPaymentAmount,
       helperTotalAmount,
-      totalWorks: filteredJobs.length,
+      pendingTotalCollected,
+      pendingIncentiveBalance,
+      pendingNetBalance,
     };
   }, [filteredJobs]);
 
@@ -808,6 +826,14 @@ export default function HomePage() {
                     setCreateModalOpen(false);
                   }}
                   onDelete={(job) => setDeleteJobTarget(job)}
+                  onStatusChange={async (job, status) => {
+                    try {
+                      await updateJobStatus(job, status);
+                      showToast("success", "Payment status updated.");
+                    } catch (error) {
+                      showToast("error", error instanceof Error ? error.message : "Could not update payment status.");
+                    }
+                  }}
                 />
               ) : (
                 <div className="rounded-2xl border border-neutral-200 bg-white/90 px-5 py-10 text-center shadow-sm shadow-black/5">
@@ -1123,26 +1149,45 @@ function DashboardCards({
     pendingPaymentCount: number;
     pendingPaymentAmount: number;
     helperTotalAmount: number;
-    totalWorks: number;
+    pendingTotalCollected: number;
+    pendingIncentiveBalance: number;
+    pendingNetBalance: number;
   };
 }) {
+  const featuredCard = { label: "Incentive balance", value: `₹${stats.pendingIncentiveBalance.toLocaleString()}`, accent: "text-violet-700" };
   const cards = [
     { label: "No of pending payments", value: stats.pendingPaymentCount, accent: "text-amber-700" },
-    { label: "Pending payment amount", value: `₹${stats.pendingPaymentAmount.toLocaleString()}`, accent: "text-rose-700" },
+    { label: "Total incentive", value: `₹${stats.pendingPaymentAmount.toLocaleString()}`, accent: "text-rose-700" },
     { label: "Helper total amount", value: `₹${stats.helperTotalAmount.toLocaleString()}`, accent: "text-blue-700" },
-    { label: "Total works", value: stats.totalWorks, accent: "text-emerald-700" },
+    { label: "Customer collected", value: `₹${stats.pendingTotalCollected.toLocaleString()}`, accent: "text-emerald-700" },
+    { label: "Profit", value: `₹${stats.pendingNetBalance.toLocaleString()}`, accent: "text-slate-700" },
   ];
 
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-      {cards.map((card) => (
-        <div key={card.label} className="min-w-0 rounded-2xl border border-neutral-200 bg-white/90 p-4 shadow-sm shadow-black/5">
-          <p className="break-words text-[11px] font-semibold uppercase tracking-wide text-neutral-500">{card.label}</p>
-          <div className={`mt-2 text-2xl font-bold leading-none ${card.accent}`}>
-            {card.value}
-          </div>
+    <div className="flex flex-col gap-3">
+      <div className="min-w-0 rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-50 via-white to-fuchsia-50 p-4 shadow-lg shadow-violet-200/40 ring-1 ring-violet-200/70">
+        <p className="break-words text-[11px] font-semibold uppercase tracking-wide text-neutral-500">{featuredCard.label}</p>
+        <div className={`mt-2 text-2xl font-bold leading-none ${featuredCard.accent}`}>
+          {featuredCard.value}
         </div>
-      ))}
+      </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {cards.map((card) => (
+          <div
+            key={card.label}
+            className={`min-w-0 rounded-2xl border p-4 shadow-sm shadow-black/5 ${
+              card.label === "Profit"
+                ? "border-emerald-200 bg-gradient-to-br from-emerald-50 via-white to-lime-50 ring-1 ring-emerald-200/70 shadow-lg shadow-emerald-200/35"
+                : "border-neutral-200 bg-white/90"
+            }`}
+          >
+            <p className="break-words text-[11px] font-semibold uppercase tracking-wide text-neutral-500">{card.label}</p>
+            <div className={`mt-2 text-2xl font-bold leading-none ${card.accent}`}>
+              {card.value}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
